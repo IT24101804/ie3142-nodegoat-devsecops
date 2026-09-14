@@ -1,6 +1,59 @@
+# ---------------------------------------------------------------------------
+# Build-context exclusions.
+#
+# Everything listed here is withheld from `docker build`, which keeps the image
+# small, the build cache stable, and host-specific artefacts out of the image.
+# ---------------------------------------------------------------------------
+
+# CRITICAL: a developer's host-built node_modules must never enter the image.
+# The Dockerfile copies a clean, Linux-built dependency tree from the `deps`
+# stage; without this line, `COPY . .` would overlay it with binaries compiled
+# for the developer's OS. Upstream's .dockerignore omitted this.
+node_modules/
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+.github/
+
+# Docker's own files - not needed inside the image
 Dockerfile
 docker-compose.yml
+docker-compose.override.yml
 .dockerignore
-.git
-.github
-.gitignore
+
+# Secrets and local environment - must never be baked into an image layer
+.env
+.env.*
+!.env.example
+
+# Tests and linting are run by the pipeline, not shipped in the runtime image
+test/
+cypress.json
+.jshintrc
+.jshintignore
+Gruntfile.js
+
+# Documentation
+docs/
+*.md
+
+# Logs, coverage and scan output
+logs/
+*.log
+npm-debug.log*
+coverage/
+.nyc_output/
+report*.html
+.dccache
+
+# Editor and OS cruft
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local scratch
+prompt*.txt
