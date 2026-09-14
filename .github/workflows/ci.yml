@@ -284,25 +284,15 @@ jobs:
         #                  Bootstrap; scanning it reports on code we do not own.
         run: |
           docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:latest \
-            semgrep \
+            semgrep scan \
               --config p/javascript \
               --config p/nodejs \
               --config p/owasp-top-ten \
               --exclude 'app/assets/vendor' \
               --exclude 'node_modules' \
               --metrics=off \
-              --sarif --output /src/semgrep.sarif \
-              app config server.js artifacts || true
-
-          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:latest \
-            semgrep \
-              --config p/javascript \
-              --config p/nodejs \
-              --config p/owasp-top-ten \
-              --exclude 'app/assets/vendor' \
-              --exclude 'node_modules' \
-              --metrics=off \
-              --json --output /src/semgrep.json \
+              --sarif-output=/src/semgrep.sarif \
+              --json-output=/src/semgrep.json \
               app config server.js artifacts || true
 
           sudo chown "$(id -u):$(id -g)" semgrep.sarif semgrep.json || true
@@ -340,10 +330,20 @@ jobs:
           '
 
       - name: Upload SARIF to GitHub code scanning
-        # NOTE: code scanning on a PRIVATE repository requires GitHub Advanced
-        # Security. This repository is private, so the upload may be rejected.
-        # continue-on-error keeps that from failing the gate - the findings are
-        # still captured in the job summary above and the artifact below.
+        # Code scanning (the repository Security tab) requires GitHub Advanced
+        # Security on PRIVATE repositories. This repository is private and does
+        # not have it - verified: /security/code-scanning returns 404, and the
+        # upload failed with "Resource not accessible by integration".
+        #
+        # The step is therefore SKIPPED on private repositories rather than run
+        # and allowed to fail. Running a step that cannot succeed produces a red
+        # error annotation on an otherwise green run, which is misleading.
+        #
+        # It is kept, not deleted, so the pipeline works unchanged if the
+        # repository is later made public or Advanced Security is enabled.
+        # Findings are published to the job summary and uploaded as an artifact
+        # regardless, so evidence never depends on this step.
+        if: github.event.repository.private == false
         uses: github/codeql-action/upload-sarif@v4
         continue-on-error: true
         with:
