@@ -231,6 +231,159 @@ jobs:
         run: docker compose down -v --remove-orphans || true
 
   # =========================================================================
+  # SECURITY GATE 1: sast  (Static Application Security Testing)
+  #
+  # Semgrep against the application source, using curated Node/Express and
+  # OWASP rulesets.
+  #
+  # No `needs` - runs in parallel with lint, build and the other gates. It reads
+  # only the source tree, so nothing has to be built first.
+  #
+  # TOOL CHOICE: Semgrep rather than eslint-plugin-security. This project lints
+  # with jshint, not ESLint, so the ESLint route would mean introducing a second
+  # linter and config purely for CI. Semgrep needs no project config, ships
+  # curated Express/Node rulesets, and emits SARIF natively.
+  #
+  # THRESHOLD: ERROR is the actionable severity; WARNING is reported but noisy
+  # (5 of the current WARNINGs are plain documentation hyperlinks in tutorial
+  # HTML). See the enforcement block at the end of this job.
+  #
+  # REPORT-ONLY, DELIBERATELY. The current ERROR findings are NodeGoat's
+  # intentional vulnerabilities - `code-string-concat` at
+  # app/routes/contributions.js:32-33 is the eval() code injection the app
+  # exists to teach. Remediation is owned by another team member and must not
+  # happen yet, so enforcing here would make main permanently red for work this
+  # pipeline is not allowed to fix. Secrets scanning is the enforcing gate.
+  # =========================================================================
+  sast:
+    name: Security - SAST (Semgrep)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      # Scoped to THIS JOB ONLY - the workflow default remains `contents: read`.
+      # Required to upload SARIF to GitHub code scanning.
+      security-events: write
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Run Semgrep
+        # Run via the official container so the scanner version is explicit and
+        # no Python toolchain has to be provisioned on the runner.
+        #
+        # `|| true` - Semgrep exits non-zero when it finds anything. This gate is
+        # report-only, so the findings are captured and summarised below instead
+        # of failing here. The enforcement block at the end of this job is the
+        # single place that decides pass/fail.
+        #
+        # --metrics=off  : no telemetry to Semgrep's servers.
+        # --exclude      : app/assets/vendor is third-party bundled jQuery and
+        #                  Bootstrap; scanning it reports on code we do not own.
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:latest \
+            semgrep \
+              --config p/javascript \
+              --config p/nodejs \
+              --config p/owasp-top-ten \
+              --exclude 'app/assets/vendor' \
+              --exclude 'node_modules' \
+              --metrics=off \
+              --sarif --output /src/semgrep.sarif \
+              app config server.js artifacts || true
+
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:latest \
+            semgrep \
+              --config p/javascript \
+              --config p/nodejs \
+              --config p/owasp-top-ten \
+              --exclude 'app/assets/vendor' \
+              --exclude 'node_modules' \
+              --metrics=off \
+              --json --output /src/semgrep.json \
+              app config server.js artifacts || true
+
+          sudo chown "$(id -u):$(id -g)" semgrep.sarif semgrep.json || true
+          ls -l semgrep.sarif semgrep.json
+
+      - name: Summarise findings
+        # Writes a table into the run's Summary tab. This is the evidence that
+        # survives regardless of whether SARIF upload is available, and it is
+        # what gets screenshotted for the report.
+        run: |
+          node -e '
+            const fs = require("fs");
+            const j = JSON.parse(fs.readFileSync("semgrep.json", "utf8"));
+            const res = j.results || [];
+            const bySev = {};
+            const byRule = {};
+            for (const r of res) {
+              const sev = r.extra.severity;
+              bySev[sev] = (bySev[sev] || 0) + 1;
+              const id = r.check_id.split(".").pop();
+              byRule[id] = byRule[id] || { n: 0, sev, loc: [] };
+              byRule[id].n++;
+              if (byRule[id].loc.length < 3) byRule[id].loc.push(r.path + ":" + r.start.line);
+            }
+            let md = "## SAST (Semgrep)\n\n";
+            md += "**Total findings: " + res.length + "** - ";
+            md += Object.entries(bySev).map(([k, v]) => k + ": " + v).join(", ") + "\n\n";
+            md += "| Severity | Count | Rule | Example locations |\n|---|---|---|---|\n";
+            for (const [id, v] of Object.entries(byRule).sort((a, b) => b[1].n - a[1].n)) {
+              md += "| " + v.sev + " | " + v.n + " | `" + id + "` | " + v.loc.join("<br>") + " |\n";
+            }
+            md += "\n_Report-only gate. ERROR findings are NodeGoat vulnerabilities owned by the remediation workstream._\n";
+            fs.writeFileSync(process.env.GITHUB_STEP_SUMMARY, md, { flag: "a" });
+            console.log(md);
+          '
+
+      - name: Upload SARIF to GitHub code scanning
+        # NOTE: code scanning on a PRIVATE repository requires GitHub Advanced
+        # Security. This repository is private, so the upload may be rejected.
+        # continue-on-error keeps that from failing the gate - the findings are
+        # still captured in the job summary above and the artifact below.
+        uses: github/codeql-action/upload-sarif@v4
+        continue-on-error: true
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+      - name: Upload scan results as an artifact
+        # Always available, regardless of Advanced Security. This is the
+        # downloadable evidence for the report.
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: sast-semgrep-results
+          path: |
+            semgrep.sarif
+            semgrep.json
+          retention-days: 7
+
+      - name: Gate decision
+        # The single place that decides pass/fail for this job.
+        #
+        # Currently REPORTS the ERROR count without failing, for the reason given
+        # in the job header. To make this gate enforcing, delete the `echo` line
+        # below and uncomment the `exit 1`. Nothing else needs to change.
+        run: |
+          ERRORS=$(node -e '
+            const j = require("./semgrep.json");
+            console.log((j.results || []).filter(r => r.extra.severity === "ERROR").length);
+          ')
+          echo "ERROR-severity findings: $ERRORS"
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "::warning::SAST found $ERRORS ERROR-severity finding(s). Reported, not enforced - these are NodeGoat's intentional vulnerabilities, owned by the remediation workstream."
+            echo "Gate is REPORT-ONLY. Not failing the build."
+            # exit 1   # <-- uncomment to make this gate enforcing
+          else
+            echo "No ERROR-severity findings."
+          fi
+
+  # =========================================================================
   # JOB 4: ci-status
   #
   # A single aggregating job that succeeds only if every other job succeeded.
@@ -247,7 +400,7 @@ jobs:
     name: CI status
     runs-on: ubuntu-latest
     if: always()
-    needs: [lint, build, smoke-test]
+    needs: [lint, build, smoke-test, sast]
 
     steps:
       - name: Report and enforce job results
@@ -255,13 +408,15 @@ jobs:
           echo "lint:       ${{ needs.lint.result }}"
           echo "build:      ${{ needs.build.result }}"
           echo "smoke-test: ${{ needs.smoke-test.result }}"
+          echo "sast:       ${{ needs.sast.result }}"
           echo
 
           failed=0
           for result in \
             "${{ needs.lint.result }}" \
             "${{ needs.build.result }}" \
-            "${{ needs.smoke-test.result }}"
+            "${{ needs.smoke-test.result }}" \
+            "${{ needs.sast.result }}"
           do
             if [ "$result" != "success" ]; then
               failed=1
