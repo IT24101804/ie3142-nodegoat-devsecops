@@ -384,6 +384,137 @@ jobs:
           fi
 
   # =========================================================================
+  # SECURITY GATE 2: dependency-scan  (SCA - Software Composition Analysis)
+  #
+  # npm audit against the pinned dependency tree in package-lock.json.
+  #
+  # No `needs` - runs in parallel with everything else.
+  #
+  # TOOL CHOICE: npm audit rather than Snyk or OWASP Dependency-Check.
+  #   - Snyk requires a SNYK_TOKEN repository secret; this pipeline needs no
+  #     credentials at all, which is one less thing to leak or rotate.
+  #   - OWASP Dependency-Check downloads the full NVD feed (several minutes per
+  #     run) and is aimed at Java ecosystems.
+  #   - npm audit is native to this ecosystem, reads our exact lockfile, and is
+  #     already present on the runner.
+  #
+  # NOTE: no `npm ci` step. npm audit resolves package-lock.json against the
+  # registry advisory API and does not need node_modules installed, so this is
+  # the cheapest of the four gates.
+  #
+  # SCOPE: --omit=dev. This is a deliberate decision worth defending. The
+  # Dockerfile builds the runtime image with `npm ci --omit=dev`, so dev
+  # dependencies (grunt, cypress, mocha, jshint) are NOT shipped and are not
+  # attack surface for the deployed application. Scanning them inflates the
+  # numbers without reflecting real risk: the full tree reports 145
+  # vulnerabilities, production-only reports 51. Both counts are printed in the
+  # summary so the effect of this scoping is visible rather than hidden.
+  #
+  # THRESHOLD: critical.
+  #
+  # REPORT-ONLY, DELIBERATELY. The 16 critical advisories are unfixable without
+  # replacing NodeGoat's dependency tree - underscore (arbitrary code
+  # execution), swig (arbitrary file read), bson (CVE-2019-2391), and several
+  # prototype-pollution advisories. Vulnerable dependencies are OWASP A9 and are
+  # exactly what this application exists to demonstrate; remediation belongs to
+  # another team member. Secrets scanning is the enforcing gate.
+  # =========================================================================
+  dependency-scan:
+    name: Security - Dependency scan (npm audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+
+      - name: Run npm audit
+        # `|| true` on both: npm audit exits non-zero whenever it finds anything
+        # at or above the audit level. This gate is report-only, so findings are
+        # captured here and the pass/fail decision is made once, at the end.
+        run: |
+          echo "--- production dependencies (what actually ships) ---"
+          npm audit --omit=dev --json > audit-prod.json 2>/dev/null || true
+
+          echo "--- full tree, for comparison only ---"
+          npm audit --json > audit-all.json 2>/dev/null || true
+
+          ls -l audit-prod.json audit-all.json
+
+      - name: Summarise findings
+        run: |
+          node -e '
+            const fs = require("fs");
+            const load = f => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { return null; } };
+            const prod = load("audit-prod.json");
+            const all  = load("audit-all.json");
+
+            const counts = j => (j && j.metadata && j.metadata.vulnerabilities) || {};
+            const p = counts(prod), a = counts(all);
+
+            let md = "## Dependency scan (npm audit)\n\n";
+            md += "| Scope | Critical | High | Moderate | Low | Total |\n|---|---|---|---|---|---|\n";
+            md += "| **Production** (`--omit=dev`, what ships) | " + (p.critical||0) + " | " + (p.high||0) + " | " + (p.moderate||0) + " | " + (p.low||0) + " | **" + (p.total||0) + "** |\n";
+            md += "| Full tree (incl. dev, for comparison) | " + (a.critical||0) + " | " + (a.high||0) + " | " + (a.moderate||0) + " | " + (a.low||0) + " | " + (a.total||0) + " |\n\n";
+
+            const vulns = (prod && prod.vulnerabilities) || {};
+            const crit = [];
+            for (const [name, v] of Object.entries(vulns)) {
+              if (v.severity !== "critical") continue;
+              const titles = (v.via || []).filter(x => typeof x === "object").map(x => x.title);
+              crit.push({ name, title: titles[0] || "(vulnerable transitive dependency)", range: v.range || "" });
+            }
+            if (crit.length) {
+              md += "### Critical advisories in production dependencies (" + crit.length + ")\n\n";
+              md += "| Package | Advisory |\n|---|---|\n";
+              for (const c of crit) md += "| `" + c.name + "` | " + c.title + " |\n";
+            }
+            md += "\n_Report-only gate. These are OWASP A9 findings - NodeGoat's intentional vulnerable dependencies, owned by the remediation workstream. Dev dependencies are excluded because `npm ci --omit=dev` means they are not present in the runtime image._\n";
+
+            fs.writeFileSync(process.env.GITHUB_STEP_SUMMARY, md, { flag: "a" });
+            console.log(md);
+          '
+
+      - name: Upload audit results as an artifact
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: dependency-scan-npm-audit-results
+          path: |
+            audit-prod.json
+            audit-all.json
+          retention-days: 7
+
+      - name: Gate decision
+        # Threshold is `critical` on production dependencies.
+        #
+        # Currently REPORTS without failing, for the reason in the job header.
+        # To make this gate enforcing, delete the echo and uncomment `exit 1`.
+        run: |
+          CRITICAL=$(node -e '
+            const j = require("./audit-prod.json");
+            console.log(((j.metadata||{}).vulnerabilities||{}).critical || 0);
+          ')
+          HIGH=$(node -e '
+            const j = require("./audit-prod.json");
+            console.log(((j.metadata||{}).vulnerabilities||{}).high || 0);
+          ')
+          echo "Production dependencies - critical: $CRITICAL, high: $HIGH"
+
+          if [ "$CRITICAL" -gt 0 ]; then
+            echo "::warning::Dependency scan found $CRITICAL critical advisory/advisories in production dependencies. Reported, not enforced - these are NodeGoat's intentional vulnerable dependencies (OWASP A9), owned by the remediation workstream."
+            echo "Gate is REPORT-ONLY. Not failing the build."
+            # exit 1   # <-- uncomment to make this gate enforcing
+          else
+            echo "No critical advisories in production dependencies."
+          fi
+
+  # =========================================================================
   # JOB 4: ci-status
   #
   # A single aggregating job that succeeds only if every other job succeeded.
@@ -400,15 +531,16 @@ jobs:
     name: CI status
     runs-on: ubuntu-latest
     if: always()
-    needs: [lint, build, smoke-test, sast]
+    needs: [lint, build, smoke-test, sast, dependency-scan]
 
     steps:
       - name: Report and enforce job results
         run: |
-          echo "lint:       ${{ needs.lint.result }}"
-          echo "build:      ${{ needs.build.result }}"
-          echo "smoke-test: ${{ needs.smoke-test.result }}"
-          echo "sast:       ${{ needs.sast.result }}"
+          echo "lint:            ${{ needs.lint.result }}"
+          echo "build:           ${{ needs.build.result }}"
+          echo "smoke-test:      ${{ needs.smoke-test.result }}"
+          echo "sast:            ${{ needs.sast.result }}"
+          echo "dependency-scan: ${{ needs.dependency-scan.result }}"
           echo
 
           failed=0
@@ -416,7 +548,8 @@ jobs:
             "${{ needs.lint.result }}" \
             "${{ needs.build.result }}" \
             "${{ needs.smoke-test.result }}" \
-            "${{ needs.sast.result }}"
+            "${{ needs.sast.result }}" \
+            "${{ needs.dependency-scan.result }}"
           do
             if [ "$result" != "success" ]; then
               failed=1
