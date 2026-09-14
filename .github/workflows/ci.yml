@@ -1,0 +1,316 @@
+# ---------------------------------------------------------------------------
+# Continuous Integration
+# IE3142 DevOps Security :: Phase 4, Step 1 (build + test pipeline)
+#
+# Runs on every push and every pull request. Fails the run if the code does not
+# lint, the container image does not build, or the assembled application does
+# not actually work.
+#
+# Security scanning (SAST, dependency, secrets, container) is Step 2 and is
+# deliberately NOT here yet. The job graph below is shaped so those gates can be
+# added as additional jobs without restructuring anything - see the comments at
+# the bottom of this file.
+# ---------------------------------------------------------------------------
+
+name: CI
+
+on:
+  # Every push, on every branch. Feature branches get the same gate as main,
+  # so problems surface before a pull request is ever opened.
+  push:
+  # Pull requests targeting main. This also covers forks, whose pushes do not
+  # trigger the `push` event on this repository.
+  pull_request:
+    branches: [main]
+
+# Least privilege. The default GITHUB_TOKEN is granted broad write scopes on
+# some repository configurations; this narrows it to read-only, which is all a
+# build-and-test pipeline needs. Step 2 jobs that upload SARIF results will need
+# `security-events: write` added - scoped to that job, not globally.
+permissions:
+  contents: read
+
+# If several commits are pushed to the same branch in quick succession, cancel
+# the superseded runs. Saves runner minutes and means the status shown against a
+# branch always reflects its newest commit.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # =========================================================================
+  # JOB 1: lint
+  #
+  # Static analysis of the source. No Docker, no database - so it is the
+  # fastest signal available and runs in parallel with the image build.
+  # =========================================================================
+  lint:
+    name: Lint and static checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          # Matches the runtime in the Dockerfile. Linting on a different major
+          # version than we ship would let syntax through that breaks at run time.
+          node-version: '20'
+          # Caches the npm download cache (~/.npm), keyed on package-lock.json.
+          # The dev dependency tree is 962 packages and takes ~3 minutes to
+          # install cold, so this is the single biggest time saving available.
+          cache: 'npm'
+
+      - name: Install dependencies
+        # `npm ci` (not `npm install`) installs exactly the tree pinned in
+        # package-lock.json and fails on lockfile drift, so CI builds the same
+        # dependency set as every developer machine.
+        run: npm ci --no-audit --no-fund
+        env:
+          # NodeGoat pins Cypress 3.3.1, whose postinstall downloads an ~80 MB
+          # browser binary. We do not run Cypress in this pipeline (the suite is
+          # not CI-ready - see the note at the bottom), so downloading it would
+          # be pure cost and an extra network dependency that can flake.
+          CYPRESS_INSTALL_BINARY: '0'
+
+      - name: Lint JavaScript (jshint)
+        # jshint is invoked DIRECTLY rather than through `grunt jshint`.
+        #
+        # This is deliberate and important. Gruntfile.js:156 sets
+        # `grunt.option("force", true)`, which downgrades every task failure to
+        # a warning and still exits 0. Verified: injecting two real lint errors
+        # produced "Used --force, continuing" and exit code 0. Passing
+        # `--no-force` does not help, because the Gruntfile sets the option
+        # programmatically after the CLI is parsed.
+        #
+        # Calling jshint directly bypasses Grunt entirely and yields an honest
+        # exit code (0 clean / 2 on error), which is what makes this a real gate
+        # rather than decoration. The file list mirrors JS_FILES in Gruntfile.js.
+        run: |
+          npx jshint --exclude-path .jshintignore \
+            app/assets/js \
+            config \
+            app/data \
+            app/routes \
+            server.js \
+            Gruntfile.js \
+            artifacts \
+            test
+
+      - name: Upstream unit tests (currently none - see note below)
+        # Runs NodeGoat's own `npm test` so the upstream script is exercised and
+        # visible in the pipeline.
+        #
+        # BE AWARE: this currently runs ZERO tests. `npm test` maps to
+        # `grunt test` -> mochaTest:unit -> test/unit/*.js, and test/unit/ does
+        # not exist in the upstream project. It reports "No files to check...OK"
+        # and exits 0.
+        #
+        # It is kept, clearly labelled, rather than removed, so that nobody
+        # mistakes a green tick here for real unit test coverage. The genuine
+        # verification of application behaviour is the smoke-test job below.
+        # Adding a real unit suite under test/unit/ would make this meaningful.
+        run: npm test
+
+  # =========================================================================
+  # JOB 2: build
+  #
+  # Builds the application container image. Runs in PARALLEL with `lint` -
+  # neither needs the other's output, so serialising them would only add
+  # wall-clock time.
+  #
+  # The built image is exported as an artifact so later jobs consume the exact
+  # bytes that were built, rather than rebuilding and hoping for the same
+  # result. This also gives Step 2's container-scanning job something to scan
+  # without a second build.
+  # =========================================================================
+  build:
+    name: Build container image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Build the application image
+        # `docker compose build` rather than a bare `docker build`, so CI builds
+        # through exactly the same path a developer uses locally. If the compose
+        # build context or args drift, CI notices.
+        run: docker compose build web
+
+      - name: Show what was built
+        run: docker image ls nodegoat-devsec/web
+
+      - name: Export the image as a tarball
+        # `docker save` serialises the image so it can cross the job boundary.
+        run: docker save nodegoat-devsec/web:local -o /tmp/nodegoat-web-image.tar
+
+      - name: Upload the image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nodegoat-web-image
+          path: /tmp/nodegoat-web-image.tar
+          # Short retention: this is a CI intermediate, not a release artefact.
+          retention-days: 1
+          compression-level: 6
+
+  # =========================================================================
+  # JOB 3: smoke-test
+  #
+  # Starts the FULL stack (app + MongoDB) from docker-compose.yml and asserts
+  # the application actually works: serves pages, enforces auth, accepts a real
+  # login, reads seeded data back out of the database, and keeps the database
+  # off the host network.
+  #
+  # `needs: build` because it consumes the image artifact. This is the one real
+  # dependency edge in the graph.
+  #
+  # This job is where genuine confidence comes from. NodeGoat ships no working
+  # test suite, so rather than pretend otherwise, the pipeline verifies the
+  # deployable artefact end to end.
+  # =========================================================================
+  smoke-test:
+    name: Smoke test the running stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: build
+
+    steps:
+      - name: Check out the repository
+        # Needed for docker-compose.yml and scripts/smoke-test.sh.
+        uses: actions/checkout@v4
+
+      - name: Download the image built by the build job
+        uses: actions/download-artifact@v4
+        with:
+          name: nodegoat-web-image
+          path: /tmp
+
+      - name: Load the image into the local Docker daemon
+        run: |
+          docker load -i /tmp/nodegoat-web-image.tar
+          docker image ls nodegoat-devsec/web
+
+      - name: Start the full stack
+        # --no-build  : use the loaded image. Guarantees we test the artefact the
+        #               build job produced, not a fresh rebuild.
+        # --wait      : block until every service reports healthy via its
+        #               healthcheck, instead of sleeping and hoping. This is the
+        #               same mechanism `depends_on: service_healthy` uses.
+        run: docker compose up -d --no-build --wait --wait-timeout 180
+
+      - name: Show container status
+        run: docker compose ps
+
+      - name: Run the smoke test suite
+        # Exits non-zero on the first failed assertion, which fails the job and
+        # therefore the whole run.
+        run: bash scripts/smoke-test.sh
+
+      - name: Dump container logs on failure
+        # Only runs when something above failed. Without this, a red run gives
+        # you an assertion message and no idea why the app misbehaved.
+        if: failure()
+        run: |
+          echo "===================== web logs ====================="
+          docker compose logs web || true
+          echo "===================== mongo logs ==================="
+          docker compose logs mongo || true
+          echo "===================== ps ==========================="
+          docker compose ps -a || true
+
+      - name: Tear down the stack
+        # `always()` so the teardown happens even when the tests failed.
+        # -v removes the database volume, leaving no state behind.
+        if: always()
+        run: docker compose down -v --remove-orphans || true
+
+  # =========================================================================
+  # JOB 4: ci-status
+  #
+  # A single aggregating job that succeeds only if every other job succeeded.
+  #
+  # Why bother: branch protection rules name required status checks
+  # individually. With this job, only "CI status" needs to be marked required -
+  # and when Step 2 adds scanning jobs, they are added to `needs` here and are
+  # automatically enforced, with no change to the branch protection settings.
+  #
+  # `if: always()` makes it run even when a dependency failed; without it the
+  # job would be skipped and branch protection could read a skip as a pass.
+  # =========================================================================
+  ci-status:
+    name: CI status
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [lint, build, smoke-test]
+
+    steps:
+      - name: Report and enforce job results
+        run: |
+          echo "lint:       ${{ needs.lint.result }}"
+          echo "build:      ${{ needs.build.result }}"
+          echo "smoke-test: ${{ needs.smoke-test.result }}"
+          echo
+
+          failed=0
+          for result in \
+            "${{ needs.lint.result }}" \
+            "${{ needs.build.result }}" \
+            "${{ needs.smoke-test.result }}"
+          do
+            if [ "$result" != "success" ]; then
+              failed=1
+            fi
+          done
+
+          if [ "$failed" -eq 1 ]; then
+            echo "CI FAILED - at least one job did not succeed."
+            exit 1
+          fi
+
+          echo "CI PASSED - all jobs succeeded."
+
+# ---------------------------------------------------------------------------
+# EXTENSION POINTS FOR STEP 2 (security gates)
+#
+# The graph is currently:
+#
+#     lint  ─────────────┐
+#                        ├──► ci-status
+#     build ──► smoke-test ┘
+#
+# Step 2 slots in without restructuring:
+#
+#   secrets-scan     no `needs` - runs in parallel with lint and build.
+#                    Scans the working tree and git history (gitleaks /
+#                    trufflehog). Expected findings are documented in
+#                    README.md under "Known hardcoded secrets".
+#
+#   sast             no `needs` - parallel. Source analysis (CodeQL / Semgrep).
+#                    Needs `permissions: security-events: write` on that job.
+#
+#   dependency-scan  no `needs` - parallel. SCA against package-lock.json
+#                    (npm audit / Snyk / OWASP Dependency-Check).
+#
+#   container-scan   `needs: build` - downloads the SAME image artifact this
+#                    file already publishes and scans it (Trivy / Grype).
+#                    No second build required, which is precisely why the
+#                    build job exports the image rather than keeping it local.
+#
+# Each new job is then added to `ci-status.needs` to become enforcing.
+#
+# NOTE ON THE TEST SUITE
+# NodeGoat ships no usable automated tests:
+#   - test/unit/ does not exist, so `npm test` runs nothing and always passes.
+#   - test/e2e/ is Cypress 3.3.1 (2019); the binary is not installed, and the
+#     suite needs a running app plus a live database.
+#   - test/security/ needs an OWASP ZAP proxy at a hardcoded VirtualBox address
+#     (192.168.56.20:8080) and an undeclared chromedriver dependency. It is also
+#     DAST, which belongs to Step 2.
+# The smoke-test job is the deliberate, documented response to that gap.
+# ---------------------------------------------------------------------------
