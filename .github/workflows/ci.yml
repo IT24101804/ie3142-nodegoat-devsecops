@@ -447,38 +447,49 @@ jobs:
           ls -l audit-prod.json audit-all.json
 
       - name: Summarise findings
+        # The summariser is written to a file with a QUOTED heredoc (<<'EOF')
+        # rather than passed inline via `node -e '...'`.
+        #
+        # Reason: inside a single-quoted shell string, an apostrophe in ordinary
+        # English prose ("NodeGoat's") terminates the quote early and bash then
+        # fails to parse the remainder, exiting 2. That is precisely what broke
+        # run #7. A quoted heredoc makes the entire block literal - no shell
+        # interpretation of quotes, backticks or $ - so prose can be written
+        # normally and the script cannot be broken by its own text.
         run: |
-          node -e '
-            const fs = require("fs");
-            const load = f => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { return null; } };
-            const prod = load("audit-prod.json");
-            const all  = load("audit-all.json");
+          cat > /tmp/summarise-audit.js <<'SUMMARISER'
+          const fs = require("fs");
+          const load = f => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch (e) { return null; } };
+          const prod = load("audit-prod.json");
+          const all  = load("audit-all.json");
 
-            const counts = j => (j && j.metadata && j.metadata.vulnerabilities) || {};
-            const p = counts(prod), a = counts(all);
+          const counts = j => (j && j.metadata && j.metadata.vulnerabilities) || {};
+          const p = counts(prod), a = counts(all);
 
-            let md = "## Dependency scan (npm audit)\n\n";
-            md += "| Scope | Critical | High | Moderate | Low | Total |\n|---|---|---|---|---|---|\n";
-            md += "| **Production** (`--omit=dev`, what ships) | " + (p.critical||0) + " | " + (p.high||0) + " | " + (p.moderate||0) + " | " + (p.low||0) + " | **" + (p.total||0) + "** |\n";
-            md += "| Full tree (incl. dev, for comparison) | " + (a.critical||0) + " | " + (a.high||0) + " | " + (a.moderate||0) + " | " + (a.low||0) + " | " + (a.total||0) + " |\n\n";
+          let md = "## Dependency scan (npm audit)\n\n";
+          md += "| Scope | Critical | High | Moderate | Low | Total |\n|---|---|---|---|---|---|\n";
+          md += "| **Production** (`--omit=dev`, what ships) | " + (p.critical||0) + " | " + (p.high||0) + " | " + (p.moderate||0) + " | " + (p.low||0) + " | **" + (p.total||0) + "** |\n";
+          md += "| Full tree (incl. dev, for comparison) | " + (a.critical||0) + " | " + (a.high||0) + " | " + (a.moderate||0) + " | " + (a.low||0) + " | " + (a.total||0) + " |\n\n";
 
-            const vulns = (prod && prod.vulnerabilities) || {};
-            const crit = [];
-            for (const [name, v] of Object.entries(vulns)) {
-              if (v.severity !== "critical") continue;
-              const titles = (v.via || []).filter(x => typeof x === "object").map(x => x.title);
-              crit.push({ name, title: titles[0] || "(vulnerable transitive dependency)", range: v.range || "" });
-            }
-            if (crit.length) {
-              md += "### Critical advisories in production dependencies (" + crit.length + ")\n\n";
-              md += "| Package | Advisory |\n|---|---|\n";
-              for (const c of crit) md += "| `" + c.name + "` | " + c.title + " |\n";
-            }
-            md += "\n_Report-only gate. These are OWASP A9 findings - NodeGoat's intentional vulnerable dependencies, owned by the remediation workstream. Dev dependencies are excluded because `npm ci --omit=dev` means they are not present in the runtime image._\n";
+          const vulns = (prod && prod.vulnerabilities) || {};
+          const crit = [];
+          for (const [name, v] of Object.entries(vulns)) {
+            if (v.severity !== "critical") continue;
+            const titles = (v.via || []).filter(x => typeof x === "object").map(x => x.title);
+            crit.push({ name, title: titles[0] || "(vulnerable transitive dependency)" });
+          }
+          if (crit.length) {
+            md += "### Critical advisories in production dependencies (" + crit.length + ")\n\n";
+            md += "| Package | Advisory |\n|---|---|\n";
+            for (const c of crit) md += "| `" + c.name + "` | " + c.title + " |\n";
+          }
+          md += "\n_Report-only gate. These are OWASP A9 findings: the intentional vulnerable dependencies NodeGoat ships, owned by the remediation workstream. Dev dependencies are excluded because `npm ci --omit=dev` means they are not present in the runtime image._\n";
 
-            fs.writeFileSync(process.env.GITHUB_STEP_SUMMARY, md, { flag: "a" });
-            console.log(md);
-          '
+          fs.writeFileSync(process.env.GITHUB_STEP_SUMMARY, md, { flag: "a" });
+          console.log(md);
+          SUMMARISER
+
+          node /tmp/summarise-audit.js
 
       - name: Upload audit results as an artifact
         uses: actions/upload-artifact@v7
