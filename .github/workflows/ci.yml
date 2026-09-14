@@ -52,10 +52,10 @@ jobs:
 
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           # Matches the runtime in the Dockerfile. Linting on a different major
           # version than we ship would let syntax through that breaks at run time.
@@ -135,7 +135,7 @@ jobs:
 
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build the application image
         # `docker compose build` rather than a bare `docker build`, so CI builds
@@ -151,7 +151,7 @@ jobs:
         run: docker save nodegoat-devsec/web:local -o /tmp/nodegoat-web-image.tar
 
       - name: Upload the image artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nodegoat-web-image
           path: /tmp/nodegoat-web-image.tar
@@ -183,10 +183,10 @@ jobs:
     steps:
       - name: Check out the repository
         # Needed for docker-compose.yml and scripts/smoke-test.sh.
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download the image built by the build job
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: nodegoat-web-image
           path: /tmp
