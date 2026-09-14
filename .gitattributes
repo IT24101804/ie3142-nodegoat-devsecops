@@ -1,0 +1,30 @@
+# Normalise all text files to LF in the repository.
+# Rationale: the team works across Windows/macOS/Linux and the application is
+# built into a Linux container. Files stored with CRLF break shell scripts and
+# entrypoints inside Linux images, and produce whole-file diffs between members.
+* text=auto eol=lf
+
+# Files that MUST be LF - they are executed inside Linux containers.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.js        text eol=lf
+*.json      text eol=lf
+*.html      text eol=lf
+
+# Windows-only files keep CRLF.
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+
+# Binary files - never touch.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.woff      binary
+*.woff2     binary
+*.ttf       binary
+*.eot       binary
+*.pdf       binary
