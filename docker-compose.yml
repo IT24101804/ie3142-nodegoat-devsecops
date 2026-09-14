@@ -1,17 +1,99 @@
-version: "3.7"
+# ---------------------------------------------------------------------------
+# OWASP NodeGoat - full application stack
+# IE3142 DevOps Security :: Phase 1 (containerisation)
+#
+#   docker compose up --build      brings up the ENTIRE application
+#   docker compose down            stops it (data survives)
+#   docker compose down -v         stops it and destroys the database
+#
+# No `version:` key: it is obsolete from Compose v2 onward and emits a warning.
+#
+# Every setting is parameterised with a ${VAR:-default}. The stack therefore
+# works on a fresh clone with NO .env file, while still allowing any value to be
+# overridden locally. See .env.example.
+# ---------------------------------------------------------------------------
+
+name: nodegoat-devsec
 
 services:
-  web:
-    build: .
-    environment:
-      NODE_ENV:
-      MONGODB_URI: mongodb://mongo:27017/nodegoat
-    command: sh -c "until nc -z -w 2 mongo 27017 && echo 'mongo is ready for connections' && node artifacts/db-reset.js && npm start; do sleep 2; done"
-    ports:
-      - "4000:4000"
 
+  # -------------------------------------------------------------------------
+  # web - the NodeGoat Express application (the only publicly reachable service)
+  # -------------------------------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nodegoat-devsec/web:local
+    container_name: nodegoat-web
+    restart: unless-stopped
+
+    environment:
+      # Explicit, not inherited from the host shell. Upstream used a bare
+      # `NODE_ENV:` passthrough, which made behaviour differ per developer.
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 4000
+      # Service-name DNS on the private compose network. No credentials: the
+      # database is unauthenticated and unreachable from outside the network.
+      # Externalising this into a managed secret is a later-phase task.
+      MONGODB_URI: mongodb://${MONGO_HOST:-mongo}:${MONGO_PORT:-27017}/${MONGO_DB:-nodegoat}
+
+    ports:
+      # Bound to 127.0.0.1 by default. NodeGoat is deliberately vulnerable, so
+      # it must NOT be reachable from the university LAN. Upstream's "4000:4000"
+      # would have bound 0.0.0.0 and exposed it to every host on the network.
+      - "${APP_BIND_ADDRESS:-127.0.0.1}:${APP_PORT:-4000}:4000"
+
+    depends_on:
+      mongo:
+        # Declarative startup ordering: compose will not start `web` until
+        # mongo's healthcheck passes. Replaces upstream's `until nc -z ...`
+        # shell retry loop, which also re-seeded the DB on every app crash.
+        condition: service_healthy
+
+    networks:
+      - nodegoat-net
+
+  # -------------------------------------------------------------------------
+  # mongo - the application database
+  # -------------------------------------------------------------------------
   mongo:
-    image: mongo:4.4
-    user: mongodb
+    # Pinned to 4.4 deliberately. MongoDB 5.0+ requires an AVX-capable CPU and
+    # will crash-loop on older hardware; 4.4 keeps the stack runnable on every
+    # team member's machine. Revisit when image scanning lands in a later phase.
+    image: mongo:${MONGO_IMAGE_TAG:-4.4}
+    container_name: nodegoat-mongo
+    restart: unless-stopped
+
+    # NOTE: there is intentionally NO `ports:` mapping here. The database is
+    # published only to the internal compose network via `expose`, so it is
+    # unreachable from the host and from the wider network. This is the
+    # app <-> database trust boundary (see docs/architecture.md).
     expose:
-      - 27017
+      - "27017"
+
+    volumes:
+      # Named volume: database contents survive `docker compose down`.
+      # Destroyed only by an explicit `docker compose down -v`.
+      - mongo-data:/data/db
+
+    networks:
+      - nodegoat-net
+
+    healthcheck:
+      # mongo 4.4 ships the legacy `mongo` shell (5.0+ replaced it with mongosh).
+      test: ["CMD", "mongo", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+# ---------------------------------------------------------------------------
+volumes:
+  mongo-data:
+    name: nodegoat-mongo-data
+
+networks:
+  nodegoat-net:
+    name: nodegoat-net
+    driver: bridge
