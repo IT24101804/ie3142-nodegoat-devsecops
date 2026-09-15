@@ -51,6 +51,13 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:-}
       CRYPTO_KEY: ${CRYPTO_KEY:-}
 
+      # --- Vault (optional) ----------------------------------------------
+      # When VAULT_DEV_ROOT_TOKEN is set in .env, the vault-init service
+      # provisions AppRole credentials and the entrypoint fetches secrets from
+      # Vault, which take precedence over the values above. When it is not set,
+      # Vault is skipped entirely and these values are used. See docs/secrets.md.
+      VAULT_ADDR: http://vault:8200
+
     ports:
       # Bound to 127.0.0.1 by default. NodeGoat is deliberately vulnerable, so
       # it must NOT be reachable from the university LAN. Upstream's "4000:4000"
@@ -63,6 +70,15 @@ services:
         # mongo's healthcheck passes. Replaces upstream's `until nc -z ...`
         # shell retry loop, which also re-seeded the DB on every app crash.
         condition: service_healthy
+      vault-init:
+        # Wait for provisioning to finish before starting. vault-init exits 0
+        # even when Vault is not configured, so this never blocks startup.
+        condition: service_completed_successfully
+
+    volumes:
+      # AppRole credentials, read-only. role_id is an identity; secret_id is a
+      # short-lived credential. Neither is the application secret itself.
+      - vault-approle:/vault/approle:ro
 
     networks:
       - nodegoat-net
@@ -101,10 +117,96 @@ services:
       retries: 12
       start_period: 20s
 
+  # -------------------------------------------------------------------------
+  # vault - HashiCorp Vault, secrets manager
+  #
+  # Runs locally in dev mode, so the offline requirement is preserved: no cloud
+  # service is contacted. Dev mode keeps everything in memory and auto-unseals,
+  # which is appropriate for a teaching lab and explicitly NOT production - see
+  # docs/secrets.md for what production would require instead.
+  #
+  # Not published to the host: like MongoDB, Vault is reachable only from the
+  # private compose network.
+  # -------------------------------------------------------------------------
+  vault:
+    image: hashicorp/vault:${VAULT_IMAGE_TAG:-2.1.0}
+    container_name: nodegoat-vault
+    restart: unless-stopped
+
+    # Vault locks memory to keep secrets out of swap.
+    cap_add:
+      - IPC_LOCK
+
+    environment:
+      # No default, deliberately - same rule as every other secret in this file.
+      # Unset means the Vault demonstration is simply skipped.
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_ROOT_TOKEN:-}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_ADDR: http://127.0.0.1:8200
+
+    command: ["server", "-dev"]
+
+    expose:
+      - "8200"
+
+    volumes:
+      - vault-audit:/vault/audit
+
+    networks:
+      - nodegoat-net
+
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8200/v1/sys/health?standbyok=true"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  # -------------------------------------------------------------------------
+  # vault-init - one-shot provisioning, then exits.
+  #
+  # Enables the audit device, generates the application secrets INSIDE Vault,
+  # writes a least-privilege policy, and issues AppRole credentials.
+  # Exits 0 without doing anything when VAULT_DEV_ROOT_TOKEN is unset, so the
+  # stack starts normally with Vault disabled.
+  # -------------------------------------------------------------------------
+  vault-init:
+    image: hashicorp/vault:${VAULT_IMAGE_TAG:-2.1.0}
+    container_name: nodegoat-vault-init
+    restart: "no"
+
+    # Root solely to chown the audit volume, which Docker creates root-owned
+    # while the Vault server runs as uid 100. This is a one-shot container that
+    # exits after provisioning; no long-running service in this stack is root.
+    user: root
+
+    depends_on:
+      vault:
+        condition: service_healthy
+
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_DEV_ROOT_TOKEN:-}
+
+    entrypoint: ["/bin/sh", "/init/vault-init.sh"]
+
+    volumes:
+      - ./docker/vault-init.sh:/init/vault-init.sh:ro
+      - vault-approle:/vault/approle
+      - vault-audit:/vault/audit
+
+    networks:
+      - nodegoat-net
+
 # ---------------------------------------------------------------------------
 volumes:
   mongo-data:
     name: nodegoat-mongo-data
+
+  vault-approle:
+    name: nodegoat-vault-approle
+  vault-audit:
+    name: nodegoat-vault-audit
 
 networks:
   nodegoat-net:
