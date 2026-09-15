@@ -91,3 +91,13 @@ desktop.ini
 # Local scratch / coursework scaffolding (not part of the deliverable)
 # ---------------------------------------------------------------------------
 prompt*.txt
+
+# Security scanner output. Produced in CI and published as run artifacts;
+# never committed, so a local scan cannot accidentally land in the repository.
+trivy-report.json
+trivy-os-critical.txt
+gitleaks-report.json
+semgrep.sarif
+semgrep.json
+audit-prod.json
+audit-all.json

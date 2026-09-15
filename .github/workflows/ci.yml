@@ -656,6 +656,168 @@ jobs:
           echo "No new secrets detected. Gate passes."
 
   # =========================================================================
+  # SECURITY GATE 4: container-scan
+  #
+  # Trivy against the container image THIS RUN built.
+  #
+  # `needs: build` - the one gate with a dependency. It downloads the image
+  # artifact the build job already publishes and loads it, so the image is
+  # scanned exactly once and built exactly once. Rebuilding here would waste a
+  # minute and, worse, risk scanning a different image than the one the smoke
+  # test exercised. This is precisely why the build job exports the image
+  # rather than keeping it local to itself.
+  #
+  # No checkout step: this job scans a built artifact, not source. Nothing from
+  # the repository is needed.
+  #
+  # TOOL CHOICE: Trivy. Scans OS packages and language dependencies in one
+  # pass, needs no credentials, and consumes a local image directly from the
+  # Docker daemon.
+  #
+  # THRESHOLD: CRITICAL and HIGH.
+  #
+  # REPORT-ONLY, DELIBERATELY. Local preview: 9 CRITICAL and 58 HIGH, but the
+  # split matters and is surfaced in the summary below:
+  #     Alpine OS packages : 4 HIGH, 0 CRITICAL
+  #     Node.js packages   : 54 HIGH, 9 CRITICAL
+  # Almost every finding is NodeGoat's own 2016-era dependency tree, which the
+  # dependency-scan gate already reports and which the remediation workstream
+  # owns. The base image itself is nearly clean, which retrospectively
+  # validates the Phase 1 decision to move off the EOL node:12-alpine.
+  #
+  # A future enforcing threshold is computed and printed below: OS-level
+  # CRITICAL only, currently 0. That would catch a regression in the base image
+  # without being blocked by the application's intentional vulnerabilities.
+  # =========================================================================
+  container-scan:
+    name: Security - Container scan (Trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: build
+
+    steps:
+      - name: Download the image built by the build job
+        uses: actions/download-artifact@v8
+        with:
+          name: nodegoat-web-image
+          path: /tmp
+
+      - name: Load the image into the local Docker daemon
+        run: |
+          docker load -i /tmp/nodegoat-web-image.tar
+          docker image ls nodegoat-devsec/web
+
+      - name: Run Trivy
+        # Pinned to an exact version, not :latest, so scan results are
+        # reproducible run to run. The Docker socket is mounted so Trivy can
+        # read the image straight from the daemon rather than re-pulling it.
+        #
+        # --scanners vuln : CVEs only. Misconfiguration and licence scanning
+        #                   are separate concerns and would add noise here.
+        # --exit-code 0   : never fail on findings. This gate is report-only
+        #                   and the decision is made once, in the gate step.
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$PWD:/out" \
+            aquasec/trivy:0.74.0 image \
+              --scanners vuln \
+              --severity CRITICAL,HIGH \
+              --format json \
+              --output /out/trivy-report.json \
+              --exit-code 0 \
+              --quiet \
+              nodegoat-devsec/web:local
+
+          sudo chown "$(id -u):$(id -g)" trivy-report.json 2>/dev/null || true
+          ls -l trivy-report.json
+
+      - name: Summarise findings
+        # Quoted heredoc - see the dependency-scan job for why inline
+        # `node -e '...'` is avoided.
+        run: |
+          cat > /tmp/summarise-trivy.js <<'SUMMARISER'
+          const fs = require("fs");
+          let report = { Results: [] };
+          try { report = JSON.parse(fs.readFileSync("trivy-report.json", "utf8")); } catch (e) {}
+
+          const results = report.Results || [];
+          let osCrit = 0, osHigh = 0, libCrit = 0, libHigh = 0;
+          const rows = [];
+
+          for (const r of results) {
+            const vulns = r.Vulnerabilities || [];
+            if (!vulns.length) continue;
+            const isOS = r.Class === "os-pkgs";
+            let c = 0, h = 0;
+            for (const v of vulns) {
+              if (v.Severity === "CRITICAL") c++;
+              else if (v.Severity === "HIGH") h++;
+            }
+            if (isOS) { osCrit += c; osHigh += h; } else { libCrit += c; libHigh += h; }
+            rows.push({ target: r.Target, cls: r.Class, type: r.Type || "-", c, h, vulns });
+          }
+
+          let md = "## Container image scan (Trivy)\n\n";
+          md += "Image scanned: `nodegoat-devsec/web:local` - the exact artifact built by the `build` job this run.\n\n";
+          md += "| Layer | Critical | High |\n|---|---|---|\n";
+          md += "| **Base image** (Alpine OS packages) | " + osCrit + " | " + osHigh + " |\n";
+          md += "| **Application dependencies** (Node.js packages) | " + libCrit + " | " + libHigh + " |\n";
+          md += "| **Total** | **" + (osCrit + libCrit) + "** | **" + (osHigh + libHigh) + "** |\n\n";
+
+          md += "### Why the split matters\n\n";
+          md += "The base image contributes " + osCrit + " critical and " + osHigh + " high findings. Everything else comes from the application dependency tree that NodeGoat ships, which the dependency-scan gate already reports and which the remediation workstream owns.\n\n";
+
+          for (const r of rows) {
+            md += "<details><summary><b>" + r.target + "</b> (" + r.cls + ") - " + r.c + " critical, " + r.h + " high</summary>\n\n";
+            md += "| Severity | CVE | Package | Installed |\n|---|---|---|---|\n";
+            const shown = r.vulns.slice(0, 25);
+            for (const v of shown) {
+              md += "| " + v.Severity + " | " + v.VulnerabilityID + " | `" + v.PkgName + "` | " + (v.InstalledVersion || "") + " |\n";
+            }
+            if (r.vulns.length > shown.length) md += "\n_...and " + (r.vulns.length - shown.length) + " more. Full report in the uploaded artifact._\n";
+            md += "\n</details>\n\n";
+          }
+
+          md += "_Report-only gate. A future enforcing threshold of OS-level CRITICAL only currently stands at " + osCrit + ", which would catch a base-image regression without being blocked by the application vulnerabilities this project exists to demonstrate._\n";
+
+          fs.writeFileSync(process.env.GITHUB_STEP_SUMMARY, md, { flag: "a" });
+          console.log("OS: " + osCrit + " critical, " + osHigh + " high");
+          console.log("Lib: " + libCrit + " critical, " + libHigh + " high");
+          fs.writeFileSync("trivy-os-critical.txt", String(osCrit));
+          SUMMARISER
+
+          node /tmp/summarise-trivy.js
+
+      - name: Upload scan report as an artifact
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: container-scan-trivy-report
+          path: trivy-report.json
+          retention-days: 7
+
+      - name: Gate decision
+        # Report-only, for the reason in the job header.
+        #
+        # The narrow threshold that WOULD be safe to enforce here is OS-level
+        # CRITICAL, because base-image CVEs are our responsibility and are
+        # fixable by changing the base image - unlike the application
+        # dependencies, which are the subject of another workstream.
+        run: |
+          OS_CRITICAL=$(cat trivy-os-critical.txt 2>/dev/null || echo 0)
+          echo "Base-image (OS package) CRITICAL findings: $OS_CRITICAL"
+
+          if [ "$OS_CRITICAL" -gt 0 ]; then
+            echo "::warning::Container scan found $OS_CRITICAL CRITICAL finding(s) in base-image OS packages. Reported, not enforced."
+            # exit 1   # <-- uncomment to enforce on base-image CRITICAL findings
+          else
+            echo "No CRITICAL findings in base-image OS packages."
+          fi
+
+          echo "Gate is REPORT-ONLY. Not failing the build."
+
+  # =========================================================================
   # JOB 4: ci-status
   #
   # A single aggregating job that succeeds only if every other job succeeded.
@@ -672,7 +834,7 @@ jobs:
     name: CI status
     runs-on: ubuntu-latest
     if: always()
-    needs: [lint, build, smoke-test, sast, dependency-scan, secrets-scan]
+    needs: [lint, build, smoke-test, sast, dependency-scan, secrets-scan, container-scan]
 
     steps:
       - name: Report and enforce job results
@@ -683,6 +845,7 @@ jobs:
           echo "sast:            ${{ needs.sast.result }}"
           echo "dependency-scan: ${{ needs.dependency-scan.result }}"
           echo "secrets-scan:    ${{ needs.secrets-scan.result }}   (enforcing)"
+          echo "container-scan:  ${{ needs.container-scan.result }}"
           echo
 
           failed=0
@@ -692,7 +855,8 @@ jobs:
             "${{ needs.smoke-test.result }}" \
             "${{ needs.sast.result }}" \
             "${{ needs.dependency-scan.result }}" \
-            "${{ needs.secrets-scan.result }}"
+            "${{ needs.secrets-scan.result }}" \
+            "${{ needs.container-scan.result }}"
           do
             if [ "$result" != "success" ]; then
               failed=1
