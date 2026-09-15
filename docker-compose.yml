@@ -38,6 +38,19 @@ services:
       # Externalising this into a managed secret is a later-phase task.
       MONGODB_URI: mongodb://${MONGO_HOST:-mongo}:${MONGO_PORT:-27017}/${MONGO_DB:-nodegoat}
 
+      # --- Secrets -------------------------------------------------------
+      # Provisioned from .env, which is git-ignored. See .env.example and
+      # docs/secrets.md.
+      #
+      # NOTE the syntax: `${SESSION_SECRET}` with NO `:-default`. Every other
+      # variable in this file has a default so the stack runs from a fresh
+      # clone; secrets deliberately do not, because a default secret in a
+      # committed file is the problem we are removing. If unset, compose passes
+      # an empty value and the application generates a random ephemeral key for
+      # that process rather than using anything predictable.
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      CRYPTO_KEY: ${CRYPTO_KEY:-}
+
     ports:
       # Bound to 127.0.0.1 by default. NodeGoat is deliberately vulnerable, so
       # it must NOT be reachable from the university LAN. Upstream's "4000:4000"
