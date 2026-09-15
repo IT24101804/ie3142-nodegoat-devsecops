@@ -37,6 +37,25 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# ---------------------------------------------------------------------------
+# GitHub Actions encrypted secrets.
+#
+# These are the ONLY secrets this pipeline uses, and they exist for a concrete
+# reason rather than to demonstrate the feature: the workflow pulls five images
+# from Docker Hub per run (node, mongo, semgrep, gitleaks, trivy). Docker Hub
+# rate-limits ANONYMOUS pulls per source IP, and GitHub-hosted runners share
+# NAT'd address ranges, which causes intermittent `toomanyrequests` failures.
+# Authenticating raises that limit.
+#
+# Declared once here rather than per job. GitHub masks these values in logs
+# automatically. Every gate still functions without them - see the login step,
+# which degrades to anonymous pulls when they are absent, so the pipeline works
+# on forks and before the secrets have been configured.
+# ---------------------------------------------------------------------------
+env:
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
 jobs:
 
   # =========================================================================
@@ -137,6 +156,22 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v7
 
+      - name: Authenticate to Docker Hub
+        # Optional by design: if the secrets are not configured the job
+        # continues with anonymous pulls rather than failing. That keeps the
+        # pipeline working on forks and before the secrets are added.
+        #
+        # The token is piped via --password-stdin, never passed as a command
+        # argument, so it cannot appear in the process list or in shell traces.
+        # It is never echoed.
+        run: |
+          if [ -z "${DOCKERHUB_TOKEN:-}" ] || [ -z "${DOCKERHUB_USERNAME:-}" ]; then
+            echo "Docker Hub credentials not configured - using anonymous pulls."
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          echo "Authenticated to Docker Hub as $DOCKERHUB_USERNAME"
+
       - name: Build the application image
         # `docker compose build` rather than a bare `docker build`, so CI builds
         # through exactly the same path a developer uses locally. If the compose
@@ -190,6 +225,22 @@ jobs:
         with:
           name: nodegoat-web-image
           path: /tmp
+
+      - name: Authenticate to Docker Hub
+        # Optional by design: if the secrets are not configured the job
+        # continues with anonymous pulls rather than failing. That keeps the
+        # pipeline working on forks and before the secrets are added.
+        #
+        # The token is piped via --password-stdin, never passed as a command
+        # argument, so it cannot appear in the process list or in shell traces.
+        # It is never echoed.
+        run: |
+          if [ -z "${DOCKERHUB_TOKEN:-}" ] || [ -z "${DOCKERHUB_USERNAME:-}" ]; then
+            echo "Docker Hub credentials not configured - using anonymous pulls."
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          echo "Authenticated to Docker Hub as $DOCKERHUB_USERNAME"
 
       - name: Load the image into the local Docker daemon
         run: |
@@ -269,6 +320,22 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7
+
+      - name: Authenticate to Docker Hub
+        # Optional by design: if the secrets are not configured the job
+        # continues with anonymous pulls rather than failing. That keeps the
+        # pipeline working on forks and before the secrets are added.
+        #
+        # The token is piped via --password-stdin, never passed as a command
+        # argument, so it cannot appear in the process list or in shell traces.
+        # It is never echoed.
+        run: |
+          if [ -z "${DOCKERHUB_TOKEN:-}" ] || [ -z "${DOCKERHUB_USERNAME:-}" ]; then
+            echo "Docker Hub credentials not configured - using anonymous pulls."
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          echo "Authenticated to Docker Hub as $DOCKERHUB_USERNAME"
 
       - name: Run Semgrep
         # Run via the official container so the scanner version is explicit and
@@ -573,6 +640,22 @@ jobs:
           # so the whole history has to be present.
           fetch-depth: 0
 
+      - name: Authenticate to Docker Hub
+        # Optional by design: if the secrets are not configured the job
+        # continues with anonymous pulls rather than failing. That keeps the
+        # pipeline working on forks and before the secrets are added.
+        #
+        # The token is piped via --password-stdin, never passed as a command
+        # argument, so it cannot appear in the process list or in shell traces.
+        # It is never echoed.
+        run: |
+          if [ -z "${DOCKERHUB_TOKEN:-}" ] || [ -z "${DOCKERHUB_USERNAME:-}" ]; then
+            echo "Docker Hub credentials not configured - using anonymous pulls."
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          echo "Authenticated to Docker Hub as $DOCKERHUB_USERNAME"
+
       - name: Run Gitleaks
         # --redact             : never print secret values into CI logs, which
         #                        are themselves a disclosure channel.
@@ -706,6 +789,22 @@ jobs:
         run: |
           docker load -i /tmp/nodegoat-web-image.tar
           docker image ls nodegoat-devsec/web
+
+      - name: Authenticate to Docker Hub
+        # Optional by design: if the secrets are not configured the job
+        # continues with anonymous pulls rather than failing. That keeps the
+        # pipeline working on forks and before the secrets are added.
+        #
+        # The token is piped via --password-stdin, never passed as a command
+        # argument, so it cannot appear in the process list or in shell traces.
+        # It is never echoed.
+        run: |
+          if [ -z "${DOCKERHUB_TOKEN:-}" ] || [ -z "${DOCKERHUB_USERNAME:-}" ]; then
+            echo "Docker Hub credentials not configured - using anonymous pulls."
+            exit 0
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          echo "Authenticated to Docker Hub as $DOCKERHUB_USERNAME"
 
       - name: Run Trivy
         # Pinned to an exact version, not :latest, so scan results are
