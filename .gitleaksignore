@@ -1,0 +1,40 @@
+# ---------------------------------------------------------------------------
+# Gitleaks baseline - IE3142 DevOps Security
+#
+# Secrets scanning is the ENFORCING gate in this pipeline: any finding NOT
+# listed here fails the build.
+#
+# This file lists the secrets that OWASP NodeGoat already shipped at the commit
+# we imported (c5cb68a). They are recorded here, in the repository, with a
+# reason for each - so that the gate can block anything NEW without being
+# permanently red over pre-existing upstream findings.
+#
+# This is a baseline, not a suppression. Every entry below:
+#   - is a KNOWN, PUBLISHED upstream value, not a live credential
+#   - is documented in README.md under "Known hardcoded secrets"
+#   - is retained deliberately as demonstration material for this module
+#   - remains visible in every scan report uploaded as a CI artifact
+#
+# RULES FOR THIS FILE
+#   1. Never add an entry to make a red build go green. If the gate fires, a
+#      new secret has been introduced - remove the secret, do not baseline it.
+#   2. Every entry must state what the secret is and why it is acceptable.
+#   3. Entries are exact fingerprints (commit:file:rule:line), so they cover
+#      one specific finding only. A different secret in the same file, or the
+#      same secret moved to a new commit, still fails the build.
+#
+# Regenerate fingerprints with:
+#   docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest \
+#     detect --source /repo --report-format json --report-path /repo/gl.json
+# ---------------------------------------------------------------------------
+
+# OWASP ZAP API key, shipped by upstream NodeGoat in its development config.
+# Value is published in the public OWASP/NodeGoat repository and is not a live
+# credential - it refers to a ZAP proxy at a hardcoded VirtualBox address
+# (192.168.56.20:8080) that does not exist in our environment.
+# Retained as the demonstration finding for this gate. See README.md.
+bd39d5f46cbbc89dce8931c2aedabfef2b9bc794:config/env/development.js:generic-api-key:6
+
+# Same OWASP ZAP API key, duplicated by upstream into the test config.
+# Identical justification to the entry above.
+bd39d5f46cbbc89dce8931c2aedabfef2b9bc794:config/env/test.js:generic-api-key:6

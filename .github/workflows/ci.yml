@@ -526,6 +526,136 @@ jobs:
           fi
 
   # =========================================================================
+  # SECURITY GATE 3: secrets-scan   *** THIS IS THE ENFORCING GATE ***
+  #
+  # Gitleaks over the working tree AND the full git history.
+  #
+  # No `needs` - runs in parallel with everything else.
+  #
+  # TOOL CHOICE: Gitleaks, run from its official container rather than via
+  # gitleaks-action. The action requires a GITLEAKS_LICENSE for organization
+  # accounts; running the container keeps this pipeline free of any licensing
+  # or credential dependency.
+  #
+  # WHY THIS IS THE GATE THAT ENFORCES
+  #   - A leaked credential is binary. There is no defensible "acceptable
+  #     number of leaked secrets", unlike CVE counts where risk is graduated.
+  #   - Noise is near zero: 2 precise findings on this repository, both known.
+  #   - A NEW secret is never intentional NodeGoat behaviour, so enforcing here
+  #     never conflicts with the vulnerability-remediation workstream. The SAST
+  #     and dependency gates cannot say that - their findings are deliberate.
+  #
+  # BASELINE, NOT SUPPRESSION
+  # .gitleaksignore records the 2 secrets upstream NodeGoat already shipped, by
+  # exact fingerprint (commit:file:rule:line), each with a written reason. The
+  # gate therefore blocks anything NEW without being permanently red over
+  # pre-existing upstream findings. Because entries are exact fingerprints, a
+  # different secret in the same file - or the same secret moved to a new
+  # commit - still fails. The baseline is committed, commented, and every scan
+  # report is uploaded as an artifact, so nothing is hidden.
+  #
+  # Verified locally before this job was written:
+  #   with baseline, clean tree       -> "no leaks found", exit 0
+  #   with baseline, new secret added -> "leaks found: 1",  exit 1
+  # =========================================================================
+  secrets-scan:
+    name: Security - Secrets scan (Gitleaks) [ENFORCING]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository with full history
+        uses: actions/checkout@v7
+        with:
+          # CRITICAL: the default checkout is shallow (depth 1), which would let
+          # Gitleaks see only the newest commit. A secret committed and then
+          # deleted in a later commit is still leaked and must still be caught,
+          # so the whole history has to be present.
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        # --redact             : never print secret values into CI logs, which
+        #                        are themselves a disclosure channel.
+        # --gitleaks-ignore-path : apply the committed baseline.
+        # --report-format json : machine-readable evidence for the artifact.
+        #
+        # `|| true` captures the exit status instead of aborting here, so the
+        # report is always written and uploaded even on a failing run. The
+        # pass/fail decision is made once, in the gate step below.
+        run: |
+          set +e
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
+            detect \
+              --source /repo \
+              --no-banner \
+              --redact \
+              --gitleaks-ignore-path /repo/.gitleaksignore \
+              --report-format json \
+              --report-path /repo/gitleaks-report.json
+          echo "GITLEAKS_EXIT=$?" >> "$GITHUB_ENV"
+          set -e
+
+          sudo chown "$(id -u):$(id -g)" gitleaks-report.json 2>/dev/null || true
+          ls -l gitleaks-report.json 2>/dev/null || echo "[]" > gitleaks-report.json
+
+      - name: Summarise findings
+        # Quoted heredoc - see the dependency-scan job for why inline
+        # `node -e '...'` is avoided.
+        run: |
+          cat > /tmp/summarise-gitleaks.js <<'SUMMARISER'
+          const fs = require("fs");
+          let findings = [];
+          try { findings = JSON.parse(fs.readFileSync("gitleaks-report.json", "utf8")) || []; } catch (e) { findings = []; }
+
+          const baselineCount = (fs.readFileSync(".gitleaksignore", "utf8").split("\n")
+            .filter(l => l.trim() && !l.trim().startsWith("#"))).length;
+
+          let md = "## Secrets scan (Gitleaks) - ENFORCING GATE\n\n";
+          md += "- Baselined known upstream findings: **" + baselineCount + "**\n";
+          md += "- New findings this run: **" + findings.length + "**\n\n";
+
+          if (findings.length === 0) {
+            md += "No new secrets detected. Gate passes.\n\n";
+            md += "The " + baselineCount + " baselined findings are the OWASP ZAP API key that upstream NodeGoat ships in its development and test configs. They are recorded in `.gitleaksignore` with justifications and documented in README.md.\n";
+          } else {
+            md += "**BUILD BLOCKED.** A secret that is not in the baseline was detected.\n\n";
+            md += "| Rule | File | Line | Commit | Entropy |\n|---|---|---|---|---|\n";
+            for (const f of findings) {
+              md += "| `" + f.RuleID + "` | `" + f.File + "` | " + f.StartLine + " | `" + String(f.Commit).slice(0, 10) + "` | " + String(f.Entropy).slice(0, 5) + " |\n";
+            }
+            md += "\nSecret values are redacted from logs deliberately: CI logs are themselves a disclosure channel.\n\n";
+            md += "**Do not add these to `.gitleaksignore` to make the build pass.** Remove the secret, rotate it if it was ever real, and purge it from git history.\n";
+          }
+
+          fs.writeFileSync(process.env.GITHUB_STEP_SUMMARY, md, { flag: "a" });
+          console.log(md);
+          SUMMARISER
+
+          node /tmp/summarise-gitleaks.js
+
+      - name: Upload scan report as an artifact
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: secrets-scan-gitleaks-report
+          path: gitleaks-report.json
+          retention-days: 7
+
+      - name: Gate decision (ENFORCING)
+        # Unlike the other three gates, this one genuinely fails the build.
+        # Gitleaks exits 1 when it finds anything outside the baseline.
+        run: |
+          echo "Gitleaks exit code: ${GITLEAKS_EXIT}"
+
+          if [ "${GITLEAKS_EXIT}" != "0" ]; then
+            echo "::error::Secrets scan FAILED. A secret not present in the baseline was detected. Remove it and purge it from git history - do not add it to .gitleaksignore."
+            echo "BUILD BLOCKED by the secrets gate."
+            exit 1
+          fi
+
+          echo "No new secrets detected. Gate passes."
+
+  # =========================================================================
   # JOB 4: ci-status
   #
   # A single aggregating job that succeeds only if every other job succeeded.
@@ -542,7 +672,7 @@ jobs:
     name: CI status
     runs-on: ubuntu-latest
     if: always()
-    needs: [lint, build, smoke-test, sast, dependency-scan]
+    needs: [lint, build, smoke-test, sast, dependency-scan, secrets-scan]
 
     steps:
       - name: Report and enforce job results
@@ -552,6 +682,7 @@ jobs:
           echo "smoke-test:      ${{ needs.smoke-test.result }}"
           echo "sast:            ${{ needs.sast.result }}"
           echo "dependency-scan: ${{ needs.dependency-scan.result }}"
+          echo "secrets-scan:    ${{ needs.secrets-scan.result }}   (enforcing)"
           echo
 
           failed=0
@@ -560,7 +691,8 @@ jobs:
             "${{ needs.build.result }}" \
             "${{ needs.smoke-test.result }}" \
             "${{ needs.sast.result }}" \
-            "${{ needs.dependency-scan.result }}"
+            "${{ needs.dependency-scan.result }}" \
+            "${{ needs.secrets-scan.result }}"
           do
             if [ "$result" != "success" ]; then
               failed=1
