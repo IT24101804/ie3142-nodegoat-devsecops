@@ -3,9 +3,10 @@
 A containerised deployment of **OWASP NodeGoat**, used as the target application
 for a DevSecOps pipeline built for SLIIT module **IE3142 - DevOps Security**.
 
-This repository is the **Phase 1** deliverable: repository setup, containerisation
-and architecture documentation. CI/CD, security scanning, threat modelling and
-vulnerability remediation are handled in later phases.
+This repository covers repository setup, containerisation, architecture
+documentation, a CI/CD pipeline with four security gates, and secrets
+management. Threat modelling and vulnerability remediation are handled
+separately by other members of the team.
 
 ---
 
@@ -34,9 +35,10 @@ vulnerability remediation are handled in later phases.
 - [Resetting the database](#resetting-the-database)
 - [Everyday commands](#everyday-commands)
 - [Configuration](#configuration)
+- [Secrets management](#secrets-management)
 - [Project structure](#project-structure)
 - [Troubleshooting](#troubleshooting)
-- [Known hardcoded secrets](#known-hardcoded-secrets-phase-1-findings)
+- [Known hardcoded secrets](#known-hardcoded-secrets)
 - [Attribution and licence](#attribution-and-licence)
 
 ---
@@ -97,15 +99,17 @@ docker compose up --build -d
 ### What you should see
 
 ```
- Container nodegoat-mongo  Started
- Container nodegoat-mongo  Waiting
- Container nodegoat-mongo  Healthy
- Container nodegoat-web    Started
+ Container nodegoat-vault       Healthy
+ Container nodegoat-mongo       Healthy
+ Container nodegoat-vault-init  Exited
+ Container nodegoat-web         Healthy
 ```
 
 then, in the application log:
 
 ```
+[vault] AppRole credentials not found in /vault/approle - provisioning did not run.
+[vault] Falling back to environment-provided secrets.
 [entrypoint] Checking whether the database needs seeding...
 [seed] Database is empty - running artifacts/db-reset.js
 Database reset performed successfully
@@ -136,16 +140,21 @@ Or check from the command line:
 docker compose ps
 ```
 
-Both containers must report `(healthy)`:
+All long-running containers must report `(healthy)`:
 
 ```
 NAME             IMAGE                       STATUS                    PORTS
 nodegoat-mongo   mongo:4.4                   Up 24 seconds (healthy)   27017/tcp
+nodegoat-vault   hashicorp/vault:2.1.0       Up 24 seconds (healthy)   8200/tcp
 nodegoat-web     nodegoat-devsec/web:local   Up 18 seconds (healthy)   127.0.0.1:4000->4000/tcp
 ```
 
-Note that MongoDB shows **no host port mapping**. That is intentional — see
-[docs/architecture.md](docs/architecture.md).
+A fourth container, `nodegoat-vault-init`, runs once and exits — it will not
+appear in `docker compose ps` output. That is expected; see
+[Secrets management](#secrets-management).
+
+Note that MongoDB and Vault show **no host port mapping**. That is intentional —
+see [docs/architecture.md](docs/architecture.md).
 
 ---
 
@@ -282,6 +291,37 @@ then edit `.env`. **`.env` is git-ignored and must never be committed.**
 
 ---
 
+## Secrets management
+
+No secret is hardcoded in this repository. Secrets reach the running application
+through a three-layer chain, most to least preferred:
+
+```
+HashiCorp Vault (AppRole)  ->  environment / .env  ->  random ephemeral key
+```
+
+Nothing in that chain falls back to a literal value. If no source supplies a
+secret, the application generates a random one for that process and logs a
+warning naming the variable.
+
+| | |
+|---|---|
+| **Variables** | `SESSION_SECRET`, `CRYPTO_KEY` — see [`.env.example`](.env.example) for names and purposes |
+| **Local file** | `.env` (git-ignored, never committed) |
+| **Vault (optional)** | Set `VAULT_DEV_ROOT_TOKEN` in `.env` to enable the Vault demonstration; leave the two variables above blank and Vault supplies them |
+| **Pipeline** | GitHub Actions encrypted secrets — only `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`, used to authenticate image pulls |
+
+Some credentials remain deliberately hardcoded — the ZAP API key, the seeded demo
+passwords and the tutorial code samples. See
+[Known hardcoded secrets](#known-hardcoded-secrets) below for the list and the
+reasons.
+
+**Full detail:** [`docs/secrets.md`](docs/secrets.md) — complete inventory, how
+each secret is provisioned, the Vault AppRole design, why git history was not
+rewritten, and nine named limitations including the secret-zero problem.
+
+---
+
 ## Project structure
 
 ```
@@ -297,14 +337,23 @@ then edit `.env`. **`.env` is git-ignored and must never be committed.**
 │   ├── config.js           Config loader
 │   └── env/                Per-environment config
 ├── docker/                 Added for this project
-│   ├── entrypoint.sh       Seeds only if empty, then execs the app
-│   └── seed-if-empty.js    Checks whether seeding is needed
+│   ├── entrypoint.sh       Fetches Vault secrets, seeds if empty, execs the app
+│   ├── seed-if-empty.js    Checks whether seeding is needed
+│   ├── vault-init.sh       Vault provisioning: AppRole, policy, audit device
+│   └── vault-fetch.js      Runtime secret retrieval via AppRole
 ├── docs/
-│   └── architecture.md     Components, data flows, trust boundaries
+│   ├── architecture.md     Components, data flows, trust boundaries
+│   ├── secrets.md          Secrets management and provisioning
+│   └── evidence/           Evidence index and extracted scanner findings
+├── scripts/
+│   └── smoke-test.sh       End-to-end checks against the running stack
 ├── test/                   Upstream Cypress and security tests
+├── .github/workflows/
+│   └── ci.yml              CI pipeline: build, test and four security gates
 ├── Dockerfile              Multi-stage app image
 ├── docker-compose.yml      Full stack definition
 ├── .env.example            Documented configuration template
+├── .gitleaksignore         Secrets-scanning baseline, with justifications
 └── LICENSE                 Apache License 2.0 (upstream)
 ```
 
@@ -372,29 +421,34 @@ docker compose up --build
 
 ---
 
-## Known hardcoded secrets (Phase 1 findings)
+## Known hardcoded secrets
 
-NodeGoat ships hardcoded credentials. These are **deliberately left in place** so
-they can act as findings for the secrets-scanning gate in a later phase. They are
-recorded here so nobody mistakes them for an oversight.
+NodeGoat ships hardcoded credentials. The ones below are **deliberately left in
+place**, and are recorded here so nobody mistakes them for an oversight.
 
-| File : line | Value | Type |
-|---|---|---|
-| `config/env/all.js:8` | `cookieSecret` | Session signing key |
-| `config/env/all.js:9` | `cryptoKey` | Encryption key |
-| `config/env/development.js:6` | `zapApiKey` | API key (high entropy) |
-| `config/env/test.js:6` | `zapApiKey` | API key (high entropy) |
-| `artifacts/db-reset.js:18,27,35` | `Admin_123`, `User1_123`, `User2_123` | Seeded passwords, stored plaintext |
-| `test/e2e/fixtures/users/*.json` | Test credentials | Test fixtures |
-| `config/config.js:12-13` | Whole config object | Secrets printed to container logs at startup |
+| File : line | Value | Type | Why it stays |
+|---|---|---|---|
+| `config/env/development.js:6` | `zapApiKey` | API key (high entropy) | The demonstration finding for the secrets-scanning gate. Tooling-only, for a test suite that cannot run. Baselined by exact fingerprint in `.gitleaksignore`. |
+| `config/env/test.js:6` | `zapApiKey` | API key (high entropy) | Same key, duplicated upstream. Same justification. |
+| `artifacts/db-reset.js:18,27,35` | `Admin_123`, `User1_123`, `User2_123` | Seeded passwords, stored plaintext | Published upstream, documented under [Default accounts](#default-accounts), and used by `scripts/smoke-test.sh`. |
+| `test/e2e/fixtures/users/*.json` | Test credentials | Test fixtures | Cypress fixtures for a suite that cannot run. |
+| `app/views/tutorial/a2.html:153`, `a3.html:176` | `secret: "s3Cur3"` | Documentation sample | Inside `<pre>` teaching blocks. Not loaded as configuration. |
+
+### Resolved — no longer hardcoded
+
+| Was | Now |
+|---|---|
+| `config/env/all.js:8` — `cookieSecret` literal | Provisioned from `SESSION_SECRET` (`config/env/all.js:27`). No hardcoded fallback. |
+| `config/env/all.js:9` — `cryptoKey` literal | Provisioned from `CRYPTO_KEY` (`config/env/all.js:34`). No hardcoded fallback. |
+| `config/config.js:12-13` — whole config printed to logs | Secret-bearing keys are masked as `***REDACTED***` before logging (`config/config.js:21-35`). |
 
 **Not in this repository:** upstream NodeGoat tracks an RSA private key at
 `artifacts/cert/server.key`. Our `.gitignore` excludes `*.key`, so it is **not**
 committed here. The code that would read it is commented out (`server.js:21-27`),
 so the application is unaffected.
 
-Secrets management is a later-phase task. See
-[docs/architecture.md](docs/architecture.md) for the options under consideration.
+See [docs/secrets.md](docs/secrets.md) for the complete inventory and how each
+secret is provisioned.
 
 ---
 
