@@ -3,6 +3,10 @@
 Architecture of the containerised OWASP NodeGoat deployment: every component,
 every data flow between them, and the trust boundaries that separate them.
 
+## Architecture Diagram
+
+![NodeGoat DevSecOps Architecture](images/nodegoat-architecture-diagram.drawio.png)
+
 **Scope.** This documents the Phase 1 deployment architecture as actually built
 and verified. It does **not** cover the CI/CD pipeline or scanning gates (later
 phase), and it is **not** a threat model — it provides the boundaries a threat
@@ -393,15 +397,18 @@ listed explicitly so the diagram can be reproduced without reading the prose.
 | `N3` | **nodegoat-web**<br/>Node.js 20 / Express<br/>172.19.0.3:4000 | Rectangle | Zone 2 — semi-trusted | `#fcf8e3` | `#8a6d3b` |
 | `N4` | **nodegoat-mongo**<br/>MongoDB 4.4<br/>172.19.0.2:27017 | Rectangle | Zone 3 — trusted | `#dff0d8` | `#3c763d` |
 | `N5` | nodegoat-mongo-data | Cylinder (database) | Zone 3 — trusted | `#d9edf7` | `#31708f` |
-| `N6` | Docker Hub / npm registry | Cloud | Zone 0 — untrusted | `#f2dede` | `#a94442` |
 
+| `N7` | **nodegoat-vault**<br/>HashiCorp Vault 2.1.0 / :8200 | Rectangle | Zone 3 – trusted | `#dff0d8` | `#3c763d` |
+| `N8` | **nodegoat-vault-init**<br/>One-shot Vault provisioning service | Rectangle | Zone 3 – trusted | `#dff0d8` | `#3c763d` |
+| `N9` | vault-approle | Cylinder (storage) | Zone 3 – trusted | `#d9edf7` | `#31708f` |
+| `N10` | vault-audit | Cylinder (storage) | Zone 3 – trusted | `#d9edf7` | `#31708f` |
 ### Containers / groupings (draw as nested boxes)
 
 | ID | Label | Contains |
 |---|---|---|
 | `G1` | Host machine (developer laptop) | `N1`, `G2` |
-| `G2` | Docker Engine | `G3`, `N5` |
-| `G3` | Private bridge network: `nodegoat-net` (172.19.0.0/16) | `N3`, `N4` |
+| `G2` | Docker Engine | `G3`, `N5`, `N9`, `N10` |
+| `G3` | Private bridge network: `nodegoat-net` (172.19.0.0/16) | `N3`, `N4`, `N7`, `N8` |
 
 ### Edges
 
@@ -411,7 +418,13 @@ listed explicitly so the diagram can be reproduced without reading the prose.
 | `F2` | `N3` → `N4` | `MongoDB wire protocol`<br/>`TCP :27017, no auth` | Solid arrow, **thick** |
 | `F3` | `N4` → `N5` | `filesystem writes` | Solid arrow, thin |
 | `F7` | `N6` → `N3` | `HTTPS :443 (build time only)` | **Dashed** arrow, thin |
-| `X1` | `N2` → `N3` | `BLOCKED — no route` | **Dashed red**, with ✗ |
+
+| `F8` | `N8` → `N7` | `Vault provisioning / HTTP :8200` | Solid arrow, **thick** |
+| `F9` | `N7` → `N8` | `AppRole credentials provisioning` | Solid arrow, thin |
+| `F10` | `N3` → `N7` | `Fetch application secrets / HTTP :8200 (private Docker network)` | Solid arrow, **thick** |
+| `F11` | `N8` → `N9` | `Write AppRole credentials to shared volume` | Solid arrow, thin |
+| `F12` | `N9` → `N3` | `Read AppRole credentials (read-only mount)` | Solid arrow, thin |
+| `F13` | `N7` → `N10` | `Vault audit log writes` | Solid arrow, thin |
 
 ### Trust boundary lines (draw as labelled dashed lines cutting the edges)
 
@@ -421,13 +434,13 @@ listed explicitly so the diagram can be reproduced without reading the prose.
 | `TB-2` | `F2` | Application ⟷ Database | Orange dashed, thick |
 | `TB-3` | `F3` | Database ⟷ Storage | Blue dashed, thin |
 | `TB-0` | `F7` | Build-time supply chain | Grey dashed, thin |
+| `TB-4` | `F10`, `F11`, `F12` | Application ↔ Secrets Management | Purple dashed, thick |
 
 ### Layout suggestion
 
-Left-to-right, four columns: `N2/N1` → `N3` → `N4` → `N5`. Draw the trust
-boundaries as vertical dashed lines *between* the columns, each labelled in the
-margin. Put `N6` above `N3` with a dashed edge, so build-time supply chain reads
-as clearly separate from runtime.
+Left-to-right layout: place `N2/N1` on the left, followed by `N3` (NodeGoat web), then `N4` (MongoDB) and `N5` (MongoDB persistent storage). Place `N7` (Vault) below `N3`, with `N8` (vault-init) beside it and `N9` (vault-approle storage) between the Vault services and the web application. Place `N10` (vault-audit storage) below `N7`.
+
+Draw the runtime trust boundaries between the browser/application, application/database, database/storage, and application/secrets-management areas. Place `N6` (Docker Hub / npm registry) above `N3` and connect it using the dashed build-time-only `F7` edge so that the supply-chain interaction is clearly separated from runtime traffic.
 
 ---
 
@@ -445,9 +458,10 @@ Accepted, documented trade-offs in the architecture as built:
 | MongoDB 4.4 is end-of-life | Unpatched database CVEs | 5.0+ requires AVX; would break team hardware | Re-evaluate; pin by digest |
 | Base images pinned by tag, not digest | A tag could be repointed upstream | Readability and maintenance | Digest-pin and scan images |
 | No TLS anywhere | Cleartext credentials and queries | Loopback-only binding; TLS is an intentional NodeGoat lesson | Out of scope — belongs to remediation |
-| Secrets in source and in logs | Credential disclosure | **Deliberately retained** as findings for the secrets-scanning gate | Externalise to `.env` / Docker secrets |
+| Secrets exposure or insecure secret handling | Session and cryptographic secrets could be disclosed if stored in source code, logs, or insecure environment configuration | Secrets are externalised from committed source; `.env` is git-ignored, and optional Vault/AppRole provides runtime secret retrieval on the private Docker network | Keep secrets out of source control, use Vault/AppRole where configured, restrict secret access using least privilege, and verify with the secrets-scanning CI gate |
 | No resource limits on containers | A runaway container could exhaust host resources | Local dev convenience | Add `deploy.resources.limits` |
 | In-memory session store | Sessions lost on restart; will not scale | Single instance; upstream default | Out of scope for this module |
+| Vault runs in development mode | Vault dev mode stores data in memory, auto-unseals, and is not suitable for production deployment | The project is an offline local teaching environment; Vault is used to demonstrate secrets management without requiring external infrastructure | For production, deploy Vault with persistent encrypted storage, proper initialization and unsealing, TLS, restricted administrative access, and appropriate high-availability configuration |
 
 ### 8.2 Application vulnerabilities (owned by other team members)
 
@@ -494,6 +508,3 @@ Every factual claim in this document was checked against the running stack.
 
 ---
 
-*Phase 1 of the IE3142 DevOps Security group assignment. Application based on
-[OWASP NodeGoat](https://github.com/OWASP/NodeGoat) at commit `c5cb68a`,
-Apache License 2.0. See the [README](../README.md) for full attribution.*
