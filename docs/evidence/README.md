@@ -49,9 +49,22 @@ and unambiguous. URLs follow the pattern
 | CI #13 | `89ef3ae` | main | ✅ | 1m44s | Vault added; all 7 jobs still green | — |
 | **CI #14** | `a11b1a7` | main | ✅ | 1m34s | **Reference green run.** Matches current `main`; all job summaries | `34937065696` |
 | **CI #15** | `b953365` | test/secrets-gate-blocking-demo | ❌ | 1m32s | **Enforcing security gate blocks a build** (Gitleaks) | `35064195044` |
+| CI #16 | `a11b1a7` | member2-threat-model | ✅ | 1m31s | Teammate's branch — pipeline runs on contributors' work, not just the lead's | — |
+| CI #17 | `ad4d735` | member2-threat-model | ✅ | 2m8s | Teammate's threat-model commit | — |
+| **CI #18** | `ad4d735` | member2-threat-model | ✅ | 1m45s | **`pull_request` trigger gating a real PR** — all four gates ran on a teammate's contribution before merge | — |
+| CI #19 | `ac1d960` | main | ✅ | 1m34s | PR #1 merge validated on main | — |
+| **CI #20** | `530da90` | main | ✅ | 1m49s | **Docker Hub encrypted secrets authenticating** (`Login Succeeded`) | `36165428549` |
 
 **The two runs that matter most are CI #14 (everything green, all findings
 reported) and CI #15 (the enforcing gate blocking).**
+
+**CI #16-#19 were not created by the infrastructure lead.** They are a
+teammate's branch pushes, her pull request, and its merge. CI #18 is therefore
+unplanned but valuable evidence: the `pull_request:` trigger firing on a real
+contribution, with all four security gates running against someone else's work
+before it reached `main`. That is the pipeline performing its actual function
+rather than a synthetic demonstration, and it could not have been produced by
+the pipeline's own author.
 
 ### CI #14 job timings — the reference green run
 
@@ -162,7 +175,8 @@ and passed while lint failed, proving the jobs are genuinely independent.
 | # | Screenshot | Exact click path |
 |---|---|---|
 | **S12** | Encrypted secrets configured | Repo → **Settings** → **Secrets and variables** → **Actions**. Shows `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` listed with values hidden. **Capture after you add them.** |
-| **S13** | Docker Hub login authenticating | After adding the secrets, any run → left sidebar → **Build container image** → expand **"Authenticate to Docker Hub"**. Should print `Authenticated to Docker Hub as <username>` instead of the anonymous-pull fallback. **Pending — see Task 4.** |
+| **S13** | Docker Hub login authenticating | **CI #20** (`36165428549`) → left sidebar → **Build container image** → expand **"Authenticate to Docker Hub"**. Shows `Login Succeeded` and `Authenticated to Docker Hub as ***` (GitHub masks the username because it is a secret). Pair with CI #12, which shows the `using anonymous pulls` fallback. |
+| **S16** | PR gated by the pipeline | Repo → **Pull requests** → **#1** (closed) → scroll to the checks section, which shows the CI run against the branch. Or open **CI #18** directly from the Actions list. Evidence that the `pull_request` trigger gates real contributions. |
 
 #### Local terminal evidence (not GitHub)
 
@@ -185,6 +199,7 @@ Text pulled out of the runs into this directory so it is citable after the
 | [`container-trivy-split.md`](container-trivy-split.md) | Base image vs application dependency layer split | Trivy 0.74.0 against the built image |
 | [`secrets-gitleaks-baseline.md`](secrets-gitleaks-baseline.md) | Baseline entries, justification, and the blocking run findings | `.gitleaksignore` + CI #14 and CI #15 |
 | [`vault-audit-log.md`](vault-audit-log.md) | Audit entries distinguishing root provisioning from AppRole read | Local `docker compose` stack |
+| [`pipeline-narrative.md`](pipeline-narrative.md) | Walkthrough of the job graph, dependencies, gate thresholds, enforcement rationale and limitations, plus rehearsal answers for likely viva questions | Working reference |
 
 ---
 
@@ -203,7 +218,8 @@ Text pulled out of the runs into this directory so it is citable after the
 | Container image scanning gate | `ci.yml` `container-scan`; S8; `container-trivy-split.md` | ✅ |
 | At least one **enforcing** gate | Gitleaks; `ci.yml` `secrets-scan` "Gate decision (ENFORCING)" | ✅ |
 | **Captured evidence of it blocking a build** | **CI #15**; S1–S4 | ✅ |
-| GitHub Actions encrypted secrets | `ci.yml` workflow `env:` block; S12, S13 | ⏳ secrets to be added |
+| GitHub Actions encrypted secrets | `ci.yml` workflow `env:` block; S12, S13; **CI #20** `Login Succeeded` | ✅ |
+| Pipeline gates pull requests, not just pushes | **CI #18** — PR #1 from a teammate; S16 | ✅ |
 | Secrets management for the application | `docs/secrets.md`; `.env.example`; CI #11 | ✅ |
 | Vault / secrets manager injecting at runtime *(favourable marking)* | `docker/vault-init.sh`, `docker/vault-fetch.js`, S14, `vault-audit-log.md` | ✅ |
 
