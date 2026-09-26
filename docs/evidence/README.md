@@ -121,69 +121,74 @@ No screenshot needed. Cite by file path and line number.
 
 ## 3. Screenshots
 
-### 3.1 Already captured by you
+**All 18 captured.** Files are in [`screenshots/`](screenshots/), named
+`<id>-<description>--<run>-<sha>.png`, so each carries its own provenance. The
+run-and-commit segment is omitted for captures that are not from a CI run.
 
-| # | Screenshot | Proves |
+**The captures are not all from one run.** Each row below cites its own.
+
+### 3.1 From CI #15 — `b953365` — the blocking run *(run id `35064195044`)*
+
+| # | File | Proves |
 |---|---|---|
-| ✅ A | Green pipeline job graph, all gates | Pipeline runs green with all four gates present |
-| ✅ B | Annotations + artifacts panel | Gates report findings; artifacts produced |
+| **S1** | [`s01-red-job-graph--ci15-b953365.png`](screenshots/s01-red-job-graph--ci15-b953365.png) | Six jobs green, `secrets-scan` red, `ci-status` red. Only the enforcing gate failed. |
+| **S2** | [`s02-gitleaks-build-blocked-summary--ci15-b953365.png`](screenshots/s02-gitleaks-build-blocked-summary--ci15-b953365.png) | `Baselined: 2`, `New findings: 2`, `BUILD BLOCKED`, and the two-row findings table. |
+| **S3** | [`s03-red-annotations--ci15-b953365.png`](screenshots/s03-red-annotations--ci15-b953365.png) | `3 errors and 2 warnings`, including `Secrets scan FAILED...` and `Process completed with exit code 1`. |
+| **S4** | [`s04-gitleaks-gate-decision-log--ci15-b953365.png`](screenshots/s04-gitleaks-gate-decision-log--ci15-b953365.png) | The step log: `Gitleaks exit code: 1` and `BUILD BLOCKED by the secrets gate.` |
 
-Record which run each came from. If unknown, retake from **CI #14** so every
-screenshot cites one consistent commit (`a11b1a7`).
+> **S2 paired with S7 is the strongest evidence in the set.** Same gate, same
+> baseline, one scan passing with 0 new findings and one blocking with 2. That
+> pairing is what proves the baseline suppresses *known* findings without
+> blinding the gate. S2 alone would only show that the gate can fail.
 
-### 3.2 Still to capture — priority order
+### 3.2 From CI #20 — `530da90` — the reference green run *(run id `36165428549`)*
 
-All paths start at the run page:
-`.../actions/runs/<id>` → job names are in the **left sidebar**.
-
-#### From CI #15 (`35064195044`) — the blocking run. **Highest value.**
-
-| # | Screenshot | Exact click path |
+| # | File | Proves |
 |---|---|---|
-| **S1** | Red job graph | Open the run. The graph is on the summary page. Capture all 8 job boxes — six green, secrets-scan red, ci-status red. |
-| **S2** | "BUILD BLOCKED" summary | Same page, scroll to **"Security - Secrets scan (Gitleaks) [ENFORCING] summary"**. Shows `Baselined: 2`, `New findings: 2`, and the two-row findings table. |
-| **S3** | Error annotations | Same page, scroll to **Annotations** (`3 errors and 2 warnings`). Capture `Secrets scan FAILED...` and `Process completed with exit code 1`. |
-| **S4** | Failing step log | Left sidebar → **Security - Secrets scan (Gitleaks) [ENFORCING]** → expand **"Gate decision (ENFORCING)"**. Shows `Gitleaks exit code: 1` and `BUILD BLOCKED by the secrets gate.` |
+| **S0** | [`s00-green-job-graph--ci20-530da90.png`](screenshots/s00-green-job-graph--ci20-530da90.png) | All eight jobs green, with the parallel/dependent structure visible. |
+| **S5** | [`s05-semgrep-findings-summary--ci20-530da90.png`](screenshots/s05-semgrep-findings-summary--ci20-530da90.png) | `Total findings: 15 - ERROR: 3, WARNING: 12` and the per-rule table. |
+| **S6a** | [`s06a-npm-audit-scope-comparison--ci20-530da90.png`](screenshots/s06a-npm-audit-scope-comparison--ci20-530da90.png) | Production 51 vs full tree 145 — the scoping decision made visible. |
+| **S6b** | [`s06b-npm-audit-critical-advisories--ci20-530da90.png`](screenshots/s06b-npm-audit-critical-advisories--ci20-530da90.png) | All 16 critical advisories in production dependencies. |
+| **S7** | [`s07-gitleaks-passing-summary--ci20-530da90.png`](screenshots/s07-gitleaks-passing-summary--ci20-530da90.png) | `Baselined: 2`, `New findings: 0`, `Gate passes`. **Pair with S2.** |
+| **S8** | [`s08-trivy-layer-split--ci20-530da90.png`](screenshots/s08-trivy-layer-split--ci20-530da90.png) | Base image 0 critical / 4 high vs application dependencies 9 critical / 54 high. |
+| **S9** | [`s09-smoke-test-steps--ci20-530da90.png`](screenshots/s09-smoke-test-steps--ci20-530da90.png) | The smoke-test job steps against the running stack. |
+| **S10** | [`s10-artifacts-panel-digests--ci20-530da90.png`](screenshots/s10-artifacts-panel-digests--ci20-530da90.png) | Five artifacts with SHA-256 digests. |
+| **S13** | [`s13-dockerhub-login-succeeded--ci20-530da90.png`](screenshots/s13-dockerhub-login-succeeded--ci20-530da90.png) | `Login Succeeded` and `Authenticated to Docker Hub as ***` — the encrypted secrets in use. GitHub masks the username because it is a secret. Contrast with CI #12, which logged `using anonymous pulls`. |
 
-> **S2 is the single most valuable screenshot in the set.** It shows the 2
-> baselined findings staying suppressed *while* 2 new secrets are caught in the
-> same scan — which is what proves the baseline is a baseline and not a blanket
-> suppression.
+> **On CI #20 versus CI #14.** The text extracts in [§4](#4-extracted-text-evidence)
+> were taken from CI #14 (`a11b1a7`); these screenshots are from CI #20
+> (`530da90`), ten days later. The figures are **identical** — Semgrep 15
+> (3 ERROR / 12 WARNING), npm audit 51 production / 145 full tree with the same
+> 16 criticals, Gitleaks 2 baselined / 0 new. Verified against both run pages.
+> Two independent runs reporting the same numbers strengthens the evidence; it
+> also shows the point-in-time caveat on advisory counts did not bite here.
 
-#### From CI #14 (`34937065696`) — the reference green run
+### 3.3 From CI #4 — `55c127d` — the lint gate blocking *(run id `34855795216`)*
 
-| # | Screenshot | Exact click path |
+| # | File | Proves |
 |---|---|---|
-| **S5** | Semgrep findings table | Run page → scroll to **"Security - SAST (Semgrep) summary"**. Shows `Total findings: 15 - ERROR: 3, WARNING: 12` and the per-rule table. |
-| **S6** | npm audit comparison | Same page → **"Security - Dependency scan (npm audit) summary"**. Shows the Production 51 vs Full-tree 145 table and all 16 critical advisories. |
-| **S7** | Gitleaks passing | Same page → **"Security - Secrets scan (Gitleaks) [ENFORCING] summary"**. Shows `Baselined: 2`, `New findings: 0`, `Gate passes`. Pair with S2 for the before/after. |
-| **S8** | Trivy layer split | Same page → **"Security - Container scan (Trivy) summary"** → **click "Load summary"** (GitHub lazy-loads it because it is large). Shows base image 0 critical / 4 high vs app dependencies 9 critical / 54 high. |
-| **S9** | Smoke test output | Left sidebar → **Smoke test the running stack** → expand **"Run the smoke test suite"**. Shows all 8 assertions and `Smoke test: 8 passed, 0 failed`. |
-| **S10** | Artifacts panel with digests | Run page → bottom **Artifacts** section. Five artifacts with SHA-256 digests. *(Possibly your screenshot B — check.)* |
+| **S11** | [`s11-lint-gate-blocking--ci4-55c127d.png`](screenshots/s11-lint-gate-blocking--ci4-55c127d.png) | Lint red while build and smoke-test stayed green — the clearest visual proof of **job parallelism**, and a second, independent example of a gate blocking a build. |
 
-#### From CI #4 (`34855795216`) — optional second blocking example
+### 3.4 From pull request #1 — head commit `ad4d735` *(CI #18)*
 
-| # | Screenshot | Exact click path |
+| # | File | Proves |
 |---|---|---|
-| **S11** | Lint gate blocking | Run page → graph shows lint red while build and smoke-test stay green. Then left sidebar → **Lint and static checks** → expand **"Lint JavaScript (jshint)"** for the 3 errors and `exit code 2`. |
+| **S16** | [`s16-pr1-checks--ci18-ad4d735.png`](screenshots/s16-pr1-checks--ci18-ad4d735.png) | PR #1 with **16 checks passed**. The `pull_request` trigger gating a real contribution from another team member before it reached `main`. |
 
-Useful because it demonstrates **parallelism**: build and smoke-test still ran
-and passed while lint failed, proving the jobs are genuinely independent.
+> **Note on the SHA.** `ad4d735` is PR #1's head commit — verified on the PR
+> page, which reads *"merged 1 commit … ad4d735"* and *"16 checks passed"*. CI
+> #18 was the `pull_request`-event run for that PR. A `pull_request` run checks
+> out a synthetic merge ref rather than the head commit, so CI #18's own
+> checkout SHA differs from `ad4d735`; the head commit is the meaningful
+> citation and the one the PR page displays.
 
-#### Repository configuration
+### 3.5 Not from a CI run
 
-| # | Screenshot | Exact click path |
+| # | File | Proves |
 |---|---|---|
-| **S12** | Encrypted secrets configured | Repo → **Settings** → **Secrets and variables** → **Actions**. Shows `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` listed with values hidden. **Capture after you add them.** |
-| **S13** | Docker Hub login authenticating | **CI #20** (`36165428549`) → left sidebar → **Build container image** → expand **"Authenticate to Docker Hub"**. Shows `Login Succeeded` and `Authenticated to Docker Hub as ***` (GitHub masks the username because it is a secret). Pair with CI #12, which shows the `using anonymous pulls` fallback. |
-| **S16** | PR gated by the pipeline | Repo → **Pull requests** → **#1** (closed) → scroll to the checks section, which shows the CI run against the branch. Or open **CI #18** directly from the Actions list. Evidence that the `pull_request` trigger gates real contributions. |
-
-#### Local terminal evidence (not GitHub)
-
-| # | Screenshot | How to produce |
-|---|---|---|
-| **S14** | Vault AppRole injection | `docker compose logs web \| grep '\[vault\]'` — shows AppRole login, token TTL 1200s, policies `default, nodegoat-app`, 2 secrets retrieved. Also in [`vault-audit-log.md`](vault-audit-log.md). |
-| **S15** | Application running | Browser at `http://localhost:4000` logged in as `admin` showing the dashboard. Proves the containerised app works end to end. |
+| **S12** | [`s12-repository-secrets.png`](screenshots/s12-repository-secrets.png) | `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` configured as encrypted repository secrets, values hidden. Repository settings page — no commit. |
+| **S14** | [`s14-vault-approle-provisioning.png`](screenshots/s14-vault-approle-provisioning.png) | Vault AppRole provisioning and the application's runtime secret fetch. Local `docker compose` stack — no commit. See [`vault-audit-log.md`](vault-audit-log.md). |
+| **S15** | [`s15-app-logged-in.png`](screenshots/s15-app-logged-in.png) | The containerised application running and logged in as `Node Goat Admin`. Local browser — no commit. |
 
 ---
 
@@ -207,13 +212,13 @@ Text pulled out of the runs into this directory so it is citable after the
 
 | Requirement (as stated in the brief) | Evidence | Status |
 |---|---|---|
-| Repo setup, not a fork, clean attributable history | `git log` — 23 commits, upstream imported without `.git` at `bd39d5f` | ✅ |
+| Repo setup, not a fork, clean attributable history | `git log` — upstream imported without `.git` at `bd39d5f`; history attributable per member | ✅ |
 | Containerisation, single-command startup, offline | `Dockerfile`, `docker-compose.yml`, S15 | ✅ |
 | Architecture documentation with trust boundaries | `docs/architecture.md` | ✅ |
-| CI pipeline builds and tests on every push | CI #1–#15; screenshot A, S9 | ✅ |
+| CI pipeline builds and tests on every push | CI #1–#20; S0, S9 | ✅ |
 | Pipeline fails on a broken build | CI #4, S11 | ✅ |
 | SAST gate | `ci.yml` `sast` job; S5; `sast-semgrep-findings.md` | ✅ |
-| Dependency / SCA gate | `ci.yml` `dependency-scan`; S6; `dependency-npm-audit.md` | ✅ |
+| Dependency / SCA gate | `ci.yml` `dependency-scan`; S6a, S6b; `dependency-npm-audit.md` | ✅ |
 | Secrets scanning gate | `ci.yml` `secrets-scan`; S7; `secrets-gitleaks-baseline.md` | ✅ |
 | Container image scanning gate | `ci.yml` `container-scan`; S8; `container-trivy-split.md` | ✅ |
 | At least one **enforcing** gate | Gitleaks; `ci.yml` `secrets-scan` "Gate decision (ENFORCING)" | ✅ |
