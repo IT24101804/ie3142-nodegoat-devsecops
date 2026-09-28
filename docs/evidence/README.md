@@ -210,6 +210,7 @@ Text pulled out of the runs into this directory so it is citable after the
 | [`secrets-gitleaks-baseline.md`](secrets-gitleaks-baseline.md) | Baseline entries, justification, and the blocking run findings | `.gitleaksignore` + CI #14 and CI #15 |
 | [`vault-audit-log.md`](vault-audit-log.md) | Audit entries distinguishing root provisioning from AppRole read | Local `docker compose` stack |
 | [`pipeline-narrative.md`](pipeline-narrative.md) | Walkthrough of the job graph, dependencies, gate thresholds, enforcement rationale and limitations, plus rehearsal answers for likely viva questions | Working reference |
+| [`handover-to-report-author.md`](handover-to-report-author.md) | Handover for whoever writes the technical report: where each artefact lives, the figures that can be quoted with their citations, which screenshot supports which claim, what must NOT be claimed, and the limitations to include | Handover |
 
 ---
 
