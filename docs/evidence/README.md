@@ -1,8 +1,12 @@
 # Evidence Index — IE3142 NodeGoat DevSecOps
 
-Every piece of evidence available for the technical report: what it proves, which
-criterion it supports, where it came from, and whether it already exists in this
-repository or still needs to be captured as a screenshot.
+Evidence for the **infrastructure and CI/CD workstream**: containerisation, the
+pipeline, the four security gates, and secrets management. For each artefact —
+what it proves, which criterion it supports, and the run and commit it came from.
+
+Evidence for the other workstreams is owned and maintained by their authors and
+is indexed separately in [§7](#7-evidence-owned-by-other-team-members). This
+document does not review or vouch for that material.
 
 **Note on criteria.** The "Supports" column maps to the assignment requirements
 as stated in the project brief. It is not a transcription of the official rubric
@@ -23,6 +27,7 @@ was extracted into the repository — see [§4](#4-extracted-text-evidence).
 - [4. Extracted text evidence](#4-extracted-text-evidence)
 - [5. Coverage against the brief](#5-coverage-against-the-brief)
 - [6. Gaps and honest caveats](#6-gaps-and-honest-caveats)
+- [7. Evidence owned by other team members](#7-evidence-owned-by-other-team-members)
 
 ---
 
@@ -246,6 +251,43 @@ Things a marker could reasonably probe. Better to have answers ready.
 | **C8** | Old secrets remain in git history | Deliberate: teammates have clones, and none of the values were ever live. Documented in `docs/secrets.md` §7. Rotation, not history rewriting, is what actually ends an exposure. |
 | **C9** | Artifacts expire after 7 days | Run pages and job summaries persist; the numbers that matter are extracted into [§4](#4-extracted-text-evidence). |
 | **C10** | CI #15's branch was deleted | The run and its summaries persist, exactly as for CI #4. The credential was randomly generated and never valid in any account. |
+
+---
+
+## 7. Evidence owned by other team members
+
+Listed so this index accounts for everything under `docs/`, and so nobody
+assumes an unlisted directory is stray. **These artefacts were produced by other
+members and are not reviewed or verified here** — their authors own their
+accuracy.
+
+| Artefact | Author | Contents |
+|---|---|---|
+| [`../threat-model.md`](../threat-model.md) | Member 2 (`IT24103261`) | STRIDE threat model and risk assessment: scope and method, STRIDE categories, identified threats, risk assessment, threat-to-control mapping |
+| [`../images/nodegoat-architecture-diagram.drawio.png`](../images/nodegoat-architecture-diagram.drawio.png) | Member 2 (`IT24103261`) | Rendered architecture diagram, embedded at the top of `docs/architecture.md` |
+| [`../vulnerabilities.md`](../vulnerabilities.md) | Member 3 (`IT24102157`) | Vulnerability assessment and secure-coding evidence: STRIDE/OWASP mapping, exploit-and-fix write-ups for A1, A3, A4, A7, further findings for A2, A5 and A8, and a handoff checklist |
+| [`exploits/`](exploits/) | Member 3 (`IT24102157`) | 22 exploit screenshots covering A1 NoSQL injection, A2 authentication findings, A3 XSS, A4 IDOR, A7 access control, plus T2/T3/T4 and a Semgrep baseline capture |
+
+### Note on `docs/evidence/exploits/`
+
+That directory sits inside `docs/evidence/` but belongs to Member 3's
+workstream. The pipeline evidence in sections 1–6 is independent of it.
+
+### Relationship to this index
+
+The two bodies of evidence are complementary and should not be conflated:
+
+- **This index** shows that the pipeline *detects* problems — Semgrep finding
+  the `eval()` injection, the enforcing gate blocking a build, Trivy separating
+  base-image from application CVEs.
+- **Member 3's material** shows those problems being *exploited* against the
+  running application.
+
+Where they overlap — for example Semgrep's `code-string-concat` finding at
+`app/routes/contributions.js:32-34` and an exploited NoSQL injection — the
+agreement between a static finding and a demonstrated exploit is worth pointing
+out in the report, since it shows the gate flags something genuinely reachable
+rather than a theoretical pattern.
 
 ---
 
