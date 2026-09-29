@@ -1,15 +1,29 @@
 # ---------------------------------------------------------------------------
 # Continuous Integration
-# IE3142 DevOps Security :: Phase 4, Step 1 (build + test pipeline)
+# IE3142 DevOps Security
 #
 # Runs on every push and every pull request. Fails the run if the code does not
-# lint, the container image does not build, or the assembled application does
-# not actually work.
+# lint, the container image does not build, the assembled application does not
+# actually work, or an enforcing security gate finds something.
 #
-# Security scanning (SAST, dependency, secrets, container) is Step 2 and is
-# deliberately NOT here yet. The job graph below is shaped so those gates can be
-# added as additional jobs without restructuring anything - see the comments at
-# the bottom of this file.
+# Job graph:
+#
+#     lint             ─────────────┐
+#     sast          !  ─────────────┤
+#     dependency-scan  ─────────────┤──►  ci-status
+#     secrets-scan  !  ─────────────┤
+#     build ──┬─► smoke-test ───────┤
+#             └─► container-scan ───┘
+#
+#     ! = enforcing (fails the build)
+#
+# ENFORCING gates:   secrets-scan (Gitleaks), sast (Semgrep, ERROR severity)
+# REPORT-ONLY gates: dependency-scan (npm audit), container-scan (Trivy)
+#
+# The two report-only gates stay that way because their findings are NodeGoat's
+# intentional vulnerable dependencies and base-image CVEs, which are not this
+# pipeline's to fix. Each carries a commented `exit 1` and the threshold that
+# would be safe to enforce, so the decision is visible rather than absent.
 # ---------------------------------------------------------------------------
 
 name: CI
@@ -25,8 +39,8 @@ on:
 
 # Least privilege. The default GITHUB_TOKEN is granted broad write scopes on
 # some repository configurations; this narrows it to read-only, which is all a
-# build-and-test pipeline needs. Step 2 jobs that upload SARIF results will need
-# `security-events: write` added - scoped to that job, not globally.
+# build-and-test pipeline needs. The sast job widens this to
+# `security-events: write` for SARIF upload - scoped to that job, not globally.
 permissions:
   contents: read
 
@@ -144,8 +158,8 @@ jobs:
   #
   # The built image is exported as an artifact so later jobs consume the exact
   # bytes that were built, rather than rebuilding and hoping for the same
-  # result. This also gives Step 2's container-scanning job something to scan
-  # without a second build.
+  # result. It is also what the container-scan job scans, so the image is built
+  # once and scanned once, with no second build.
   # =========================================================================
   build:
     name: Build container image
@@ -299,12 +313,17 @@ jobs:
   # (5 of the current WARNINGs are plain documentation hyperlinks in tutorial
   # HTML). See the enforcement block at the end of this job.
   #
-  # REPORT-ONLY, DELIBERATELY. The current ERROR findings are NodeGoat's
-  # intentional vulnerabilities - `code-string-concat` at
-  # app/routes/contributions.js:32-33 is the eval() code injection the app
-  # exists to teach. Remediation is owned by another team member and must not
-  # happen yet, so enforcing here would make main permanently red for work this
-  # pipeline is not allowed to fix. Secrets scanning is the enforcing gate.
+  # ENFORCING. This gate was report-only while its ERROR findings were
+  # NodeGoat's intentional vulnerabilities - `code-string-concat` at
+  # app/routes/contributions.js was the eval() code injection the app exists to
+  # teach - because enforcing then would have left main permanently red over
+  # code this pipeline was not permitted to change. Once the remediation
+  # workstream removed those findings the ERROR count reached 0 and the gate was
+  # switched on, so a reintroduction now blocks the build.
+  #
+  # The image is pinned to an exact Semgrep version. An unpinned scanner on an
+  # enforcing gate can redden main with no code change at all, simply because a
+  # new rule shipped.
   # =========================================================================
   sast:
     name: Security - SAST (Semgrep)
@@ -350,7 +369,7 @@ jobs:
         # --exclude      : app/assets/vendor is third-party bundled jQuery and
         #                  Bootstrap; scanning it reports on code we do not own.
         run: |
-          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:latest \
+          docker run --rm -v "$PWD:/src" -w /src semgrep/semgrep:1.176.1 \
             semgrep scan \
               --config p/javascript \
               --config p/nodejs \
@@ -429,12 +448,24 @@ jobs:
             semgrep.json
           retention-days: 7
 
-      - name: Gate decision
+      - name: Gate decision (ENFORCING)
         # The single place that decides pass/fail for this job.
         #
-        # Currently REPORTS the ERROR count without failing, for the reason given
-        # in the job header. To make this gate enforcing, delete the `echo` line
-        # below and uncomment the `exit 1`. Nothing else needs to change.
+        # This gate became ENFORCING once the remediation workstream removed the
+        # ERROR-severity findings. It was report-only while those findings were
+        # NodeGoat's intentional vulnerabilities, because enforcing then would
+        # have left main permanently red over code this pipeline was not
+        # permitted to change.
+        #
+        # Verified at the time of the change: ERROR count 0, down from 3. The
+        # eval() code injection at app/routes/contributions.js was replaced with
+        # a validated numeric parser, and the open redirect in the /learn route
+        # was restricted.
+        #
+        # WARNING findings do NOT fail the build. 5 of the current 11 are
+        # plaintext-http-link on documentation hyperlinks in tutorial pages -
+        # genuine false positives here. That noise asymmetry (0% at ERROR, ~45%
+        # at WARNING) is why the threshold sits at ERROR.
         run: |
           ERRORS=$(node -e '
             const j = require("./semgrep.json");
@@ -443,12 +474,13 @@ jobs:
           echo "ERROR-severity findings: $ERRORS"
 
           if [ "$ERRORS" -gt 0 ]; then
-            echo "::warning::SAST found $ERRORS ERROR-severity finding(s). Reported, not enforced - these are NodeGoat's intentional vulnerabilities, owned by the remediation workstream."
-            echo "Gate is REPORT-ONLY. Not failing the build."
-            # exit 1   # <-- uncomment to make this gate enforcing
-          else
-            echo "No ERROR-severity findings."
+            echo "::error::SAST FAILED. $ERRORS ERROR-severity finding(s) detected. Fix the finding - do not lower the threshold."
+            echo "BUILD BLOCKED by the SAST gate."
+            exit 1
           fi
+
+          echo "No ERROR-severity findings. Gate passes."
+
 
   # =========================================================================
   # SECURITY GATE 2: dependency-scan  (SCA - Software Composition Analysis)
@@ -923,8 +955,8 @@ jobs:
   #
   # Why bother: branch protection rules name required status checks
   # individually. With this job, only "CI status" needs to be marked required -
-  # and when Step 2 adds scanning jobs, they are added to `needs` here and are
-  # automatically enforced, with no change to the branch protection settings.
+  # and when a gate is added, it is added to `needs` here and becomes part of the
+  # aggregate check, with no change to the branch protection settings.
   #
   # `if: always()` makes it run even when a dependency failed; without it the
   # job would be skipped and branch protection could read a skip as a pass.
@@ -970,33 +1002,25 @@ jobs:
           echo "CI PASSED - all jobs succeeded."
 
 # ---------------------------------------------------------------------------
-# EXTENSION POINTS FOR STEP 2 (security gates)
+# GATE SUMMARY
 #
-# The graph is currently:
+#   Gate             Tool        Threshold              Enforcing
+#   ---------------  ----------  ---------------------  ---------
+#   sast             Semgrep     ERROR severity         YES
+#   secrets-scan     Gitleaks    any finding            YES
+#   dependency-scan  npm audit   critical (--omit=dev)  no
+#   container-scan   Trivy       CRITICAL + HIGH        no
 #
-#     lint  ─────────────┐
-#                        ├──► ci-status
-#     build ──► smoke-test ┘
+# Why the two report-only gates stay report-only: their findings are NodeGoat's
+# intentional vulnerable dependencies (OWASP A9) and base-image CVEs. Enforcing
+# them would leave main permanently red over material another workstream owns,
+# and a pipeline that is always red gets ignored. Each carries a commented
+# `exit 1` so the decision is visible rather than absent, and container-scan
+# additionally computes the one threshold that would be safe to enforce here -
+# OS-level CRITICAL, currently 0.
 #
-# Step 2 slots in without restructuring:
-#
-#   secrets-scan     no `needs` - runs in parallel with lint and build.
-#                    Scans the working tree and git history (gitleaks /
-#                    trufflehog). Expected findings are documented in
-#                    README.md under "Known hardcoded secrets".
-#
-#   sast             no `needs` - parallel. Source analysis (CodeQL / Semgrep).
-#                    Needs `permissions: security-events: write` on that job.
-#
-#   dependency-scan  no `needs` - parallel. SCA against package-lock.json
-#                    (npm audit / Snyk / OWASP Dependency-Check).
-#
-#   container-scan   `needs: build` - downloads the SAME image artifact this
-#                    file already publishes and scans it (Trivy / Grype).
-#                    No second build required, which is precisely why the
-#                    build job exports the image rather than keeping it local.
-#
-# Each new job is then added to `ci-status.needs` to become enforcing.
+# Adding a gate: give it no `needs` unless it consumes the build artifact, then
+# add it to `ci-status.needs` so it becomes part of the aggregate check.
 #
 # NOTE ON THE TEST SUITE
 # NodeGoat ships no usable automated tests:
@@ -1004,7 +1028,6 @@ jobs:
 #   - test/e2e/ is Cypress 3.3.1 (2019); the binary is not installed, and the
 #     suite needs a running app plus a live database.
 #   - test/security/ needs an OWASP ZAP proxy at a hardcoded VirtualBox address
-#     (192.168.56.20:8080) and an undeclared chromedriver dependency. It is also
-#     DAST, which belongs to Step 2.
+#     (192.168.56.20:8080) and an undeclared chromedriver dependency.
 # The smoke-test job is the deliberate, documented response to that gap.
 # ---------------------------------------------------------------------------
