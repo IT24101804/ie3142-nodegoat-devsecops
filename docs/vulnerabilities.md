@@ -14,7 +14,7 @@ This document records offensive testing performed against the unmodified, contai
 * **Primary baseline (CI-enforced):** 15 findings (3 ERROR, 12 WARNING) — CI #20, commit `530da90`, using the pipeline’s pinned configuration (`p/javascript`, `p/nodejs`, `p/owasp-top-ten`, excluding `app/assets/vendor`)[cite: 2]. This is the number the Technical Report’s before/after SAST comparison should use, since it reflects the scan actually enforced by the DevSecOps pipeline[cite: 2].
 * **Secondary, non-enforced local scan:** 38 findings, produced locally with Semgrep’s broader `--config=auto` ruleset[cite: 2]. This scan has wider scope than the pipeline’s configuration and is not directly comparable to the CI number above — it is included only for completeness and should not be used in a before/after comparison against a CI-based “after” scan[cite: 2].
 
-![Baseline Semgrep Terminal Output](Scan%20Summary.png)  
+![Baseline Semgrep Terminal Output](docs/evidence/exploits/Scan_Summary.png)  
 *Figure 1 — Local Semgrep terminal output (`--config=auto` run, 38 findings — secondary/non-enforced scan; see note above)*[cite: 2]
 
 ---
@@ -51,18 +51,18 @@ Every application-layer threat in the threat model corresponds to an OWASP Top 1
 * **Vulnerable location:** `app/data/allocations-dao.js`, `getByUserIdAndThreshold` — the threshold parameter is interpolated directly into a `$where` clause without validation[cite: 2].
 * **Required remediation:** Replace raw string evaluation with explicit numeric casting (`parseInt`) and a bounds check before the value reaches the query[cite: 2].
 
-![NoSQL Injection Payload Submission](NoSQL_injection_payload_submission.png)  
+![NoSQL Injection Payload Submission](docs/evidence/exploits/NoSQL_injection_payload_submission.png)  
 *Figure 2 — Submitting the payload in the Threshold field*[cite: 2]
 
-![NoSQL Injection Unauthorized Records Returned](NoSQL_injection_unauthorized_records_returned.png)  
+![NoSQL Injection Unauthorized Records Returned](docs/evidence/exploits/NoSQL_injection_unauthorized_records_returned.png)  
 *Figure 3 — Query returns unauthorised database records for all users*[cite: 2]
 
 * **Secondary instance — Denial of Service via the same field:** Submitting `';while(true){};` into the same `$where`-evaluated field traps the Node.js event loop until MongoDB aborts execution[cite: 2]. Same vulnerable location and same fix (removing dynamic `$where` string evaluation resolves both)[cite: 2].
 
-![DoS Payload Submission](DoS_payload_submission.png)  
+![DoS Payload Submission](docs/evidence/exploits/DoS_payload_submission.png)  
 *Figure 4 — Submitting an infinite-loop payload*[cite: 2]
 
-![MongoDB Aborting Execution](MongoDB_aborting_execution.png)  
+![MongoDB Aborting Execution](docs/evidence/exploits/MongoDB_aborting_execution.png)  
 *Figure 5 — MongoDB aborts execution after the payload runs*[cite: 2]
 
 ---
@@ -75,10 +75,10 @@ Every application-layer threat in the threat model corresponds to an OWASP Top 1
 * **Vulnerable location:** `server.js` — Swig template engine initialised with `autoescape: false`[cite: 2].
 * **Required remediation:** Set `swig.setDefaults({ autoescape: true })` and apply input sanitisation before database insertion[cite: 2].
 
-![XSS Payload Injected](XSS_payload_injected_into_last_name_field.png)  
+![XSS Payload Injected](docs/evidence/exploits/XSS_payload_injected_into_last_name_field.png)  
 *Figure 6 — Injecting a script tag into the Last Name field*[cite: 2]
 
-![XSS Payload Executing](XSS_payload_executing.png)  
+![XSS Payload Executing](docs/evidence/exploits/XSS_payload_executing.png)  
 *Figure 7 — Pop-up confirming script execution when navigating pages*[cite: 2]
 
 ---
@@ -91,10 +91,10 @@ Every application-layer threat in the threat model corresponds to an OWASP Top 1
 * **Vulnerable location:** `app/routes/allocations.js`, `displayAllocations` — the handler trusts `req.params.userId` instead of `req.session.userId`[cite: 2].
 * **Required remediation:** Source the user identifier from `req.session.userId` server-side rather than the URL parameter[cite: 2].
 
-![IDOR URL Tampering](IDOR_URL_tampering.png)  
+![IDOR URL Tampering](docs/evidence/exploits/IDOR_URL_tampering.png)  
 *Figure 8 — Authenticated as a standard user, manually navigating to another user’s allocation URL*[cite: 2]
 
-![Insecure Code Path](Insecure_code_path.png)  
+![Insecure Code Path](docs/evidence/exploits/Insecure_code_path.png)  
 *Figure 9 — The insecure direct object reference in the route handler*[cite: 2]
 
 ---
@@ -108,7 +108,7 @@ Every application-layer threat in the threat model corresponds to an OWASP Top 1
 * **Vulnerable location:** `app/routes/index.js` — the `/benefits` routes are registered with `isLoggedIn` only; the `isAdmin` middleware exists but is not attached[cite: 2].
 * **Required remediation:** Attach `isAdmin` alongside `isLoggedIn` on both the GET and POST `/benefits` route handlers[cite: 2].
 
-![Standard User Reaching Admin Dashboard](Standard_user_reaching_the_admin_dashboard.png)  
+![Standard User Reaching Admin Dashboard](docs/evidence/exploits/Standard_user_reaching_the_admin_dashboard.png)  
 *Figure 10 — A standard user navigating directly to /benefits and modifying data*[cite: 2]
 
 ---
@@ -128,7 +128,7 @@ These three complete the coverage of every application-layer threat in `docs/thr
 * **Vulnerable location:** `docker-compose.yml` — the MongoDB instance lacks explicit authentication enforcement (`MONGO_INITDB_ROOT_USERNAME/PASSWORD`)[cite: 2].
 * **Required remediation:** Enable MongoDB authentication, create a dedicated least-privilege database user, and pass credentials securely via environment variables sourced from the project’s secrets-management mechanism[cite: 2].
 
-![Unauthenticated MongoDB Access](Unauthenticated_MongoDB_access.png)  
+![Unauthenticated MongoDB Access](docs/evidence/exploits/Unauthenticated_MongoDB_access.png)  
 *Figure 11 — Connecting directly to MongoDB from another container on the same network, with no credentials, and retrieving user records*[cite: 2]
 
 ---
@@ -141,10 +141,10 @@ These three complete the coverage of every application-layer threat in `docs/thr
 * **Vulnerable location:** `server.js` — the `csurf` import and middleware initialisation are commented out[cite: 2].
 * **Required remediation:** Enable the `csurf` middleware, generate CSRF tokens for form views, and enforce token validation on all state-changing POST requests[cite: 2].
 
-![Forged CSRF Request Page](Forged_CSRF_request_page.png)  
+![Forged CSRF Request Page](docs/evidence/exploits/Forged_CSRF_request_page.png)  
 *Figure 12 — The forged HTML page used to submit an unauthorised request*[cite: 2]
 
-![Contributions Changed Before and After](Contributions_changed_before_and_after.png)  
+![Contributions Changed Before and After](docs/evidence/exploits/Contributions_changed_before_and_after.png)  
 *Figure 13 — Contributions page values modified via the external CSRF request*[cite: 2]
 
 ---
@@ -157,7 +157,7 @@ These three complete the coverage of every application-layer threat in `docs/thr
 * **Vulnerable location:** `server.js` — Helmet’s `frameguard()` security header module is commented out[cite: 2].
 * **Required remediation:** Enable Helmet’s frame protection (`helmet.frameguard({ action: "deny" })`) or configure a Content Security Policy `frame-ancestors 'none'` header[cite: 2].
 
-![NodeGoat Rendered Inside Frame](NodeGoat_rendered_inside_an_attacker-controlled_iframe.png)  
+![NodeGoat Rendered Inside Frame](docs/evidence/exploits/NodeGoat_rendered_inside_an_attacker-controlled_iframe.png)  
 *Figure 14 — NodeGoat’s dashboard loading inside a third-party iframe with no restriction*[cite: 2]
 
 ---
@@ -171,10 +171,10 @@ These are real weaknesses, identified by code/configuration audit with supportin
 * **Location:** `app/data/user-dao.js` (`addUser`, `validateLogin`)[cite: 2]
 * **Finding:** Passwords are stored and compared using direct string equality (`===`); the bcrypt-based fix exists in the codebase but is commented out[cite: 2].
 
-![Plaintext Password Storage Code](Plaintext_password_storage_code.png)  
+![Plaintext Password Storage Code](docs/evidence/exploits/Plaintext_password_storage_code.png)  
 *Figure 15 — `addUser` storing the password with no hashing*[cite: 2]
 
-![Plaintext Password Comparison Code](Plaintext_password_comparison_code.png)  
+![Plaintext Password Comparison Code](docs/evidence/exploits/Plaintext_password_comparison_code.png)  
 *Figure 16 — `validateLogin` comparing passwords with `===` instead of a hash check*[cite: 2]
 
 ---
@@ -184,10 +184,10 @@ These are real weaknesses, identified by code/configuration audit with supportin
 * **Location:** `/login`[cite: 2]
 * **Finding:** Distinct error messages for an invalid username versus an invalid password allow account discovery[cite: 2].
 
-![Invalid Username Response](Invalid_username_response.png)  
+![Invalid Username Response](docs/evidence/exploits/Invalid_username_response.png)  
 *Figure 17 — “Invalid username” response*[cite: 2]
 
-![Invalid Password Response](Invalid_password_response.png)  
+![Invalid Password Response](docs/evidence/exploits/Invalid_password_response.png)  
 *Figure 18 — “Invalid password” response for a known username*[cite: 2]
 
 ---
@@ -197,7 +197,7 @@ These are real weaknesses, identified by code/configuration audit with supportin
 * **Location:** `server.js` session configuration[cite: 2]
 * **Finding:** The session cookie is missing the `Secure` attribute, confirmed via browser developer tools[cite: 2].
 
-![Insecure Cookie Flags](Insecure_cookie_flags.png)  
+![Insecure Cookie Flags](docs/evidence/exploits/Insecure_cookie_flags.png)  
 *Figure 19 — Session cookie inspected via DevTools, Secure not set*[cite: 2]
 
 ---
@@ -207,10 +207,10 @@ These are real weaknesses, identified by code/configuration audit with supportin
 * **Location:** `app/routes/session.js` (`PASS_RE = /^.{1,20}$/`)[cite: 2]
 * **Finding:** A one-character password was successfully registered and used to log in[cite: 2].
 
-![Weak Password Accepted at Signup](Weak_password_accepted_at_signup.png)  
+![Weak Password Accepted at Signup](docs/evidence/exploits/Weak_password_accepted_at_signup.png)  
 *Figure 20 — Registering an account with a single-character password*[cite: 2]
 
-![Weak Password Accepted at Login](Weak_password_accepted_at_login.png)  
+![Weak Password Accepted at Login](docs/evidence/exploits/Weak_password_accepted_at_login.png)  
 *Figure 21 — Successfully logging in with the same weak password*[cite: 2]
 
 ---
@@ -220,7 +220,7 @@ These are real weaknesses, identified by code/configuration audit with supportin
 * **Location:** `server.js` session configuration[cite: 2]
 * **Finding:** No `maxAge` is configured, so sessions remain valid indefinitely regardless of inactivity[cite: 2].
 
-![Missing Session Timeout](Missing_session_timeout.png)  
+![Missing Session Timeout](docs/evidence/exploits/Missing_session_timeout.png)  
 *Figure 22 — Session cookie inspected via DevTools, no expiry/Max-Age set*[cite: 2]
 
 ---
