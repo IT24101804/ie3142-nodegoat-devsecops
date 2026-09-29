@@ -59,6 +59,8 @@ and unambiguous. URLs follow the pattern
 | **CI #18** | `ad4d735` | member2-threat-model | ✅ | 1m45s | **`pull_request` trigger gating a real PR** — all four gates ran on a teammate's contribution before merge | — |
 | CI #19 | `ac1d960` | main | ✅ | 1m34s | PR #1 merge validated on main | — |
 | **CI #20** | `530da90` | main | ✅ | 1m49s | **Docker Hub encrypted secrets authenticating** (`Login Succeeded`) | `36165428549` |
+| — | `69c03ca` | main | — | — | Remediation workstream merged (PR #3). `eval()` removed, `/learn` redirect restricted, bcrypt password storage. Semgrep ERROR 3 → 0. | — |
+| — | `9c2bb21` | main | — | — | **SAST gate switched to enforcing** and the Semgrep image pinned to 1.176.1 | — |
 
 **The two runs that matter most are CI #14 (everything green, all findings
 reported) and CI #15 (the enforcing gate blocking).**
@@ -151,7 +153,7 @@ run-and-commit segment is omitted for captures that are not from a CI run.
 | # | File | Proves |
 |---|---|---|
 | **S0** | [`s00-green-job-graph--ci20-530da90.png`](screenshots/s00-green-job-graph--ci20-530da90.png) | All eight jobs green, with the parallel/dependent structure visible. |
-| **S5** | [`s05-semgrep-findings-summary--ci20-530da90.png`](screenshots/s05-semgrep-findings-summary--ci20-530da90.png) | `Total findings: 15 - ERROR: 3, WARNING: 12` and the per-rule table. |
+| **S5** | [`s05-semgrep-findings-summary--ci20-530da90.png`](screenshots/s05-semgrep-findings-summary--ci20-530da90.png) | `Total findings: 15 - ERROR: 3, WARNING: 12` and the per-rule table. **Pre-remediation baseline** — the 3 ERRORs were subsequently fixed and the gate is now enforcing at 0. See [`sast-semgrep-findings.md`](sast-semgrep-findings.md) for the before/after. |
 | **S6a** | [`s06a-npm-audit-scope-comparison--ci20-530da90.png`](screenshots/s06a-npm-audit-scope-comparison--ci20-530da90.png) | Production 51 vs full tree 145 — the scoping decision made visible. |
 | **S6b** | [`s06b-npm-audit-critical-advisories--ci20-530da90.png`](screenshots/s06b-npm-audit-critical-advisories--ci20-530da90.png) | All 16 critical advisories in production dependencies. |
 | **S7** | [`s07-gitleaks-passing-summary--ci20-530da90.png`](screenshots/s07-gitleaks-passing-summary--ci20-530da90.png) | `Baselined: 2`, `New findings: 0`, `Gate passes`. **Pair with S2.** |
@@ -223,11 +225,11 @@ Text pulled out of the runs into this directory so it is citable after the
 | Architecture documentation with trust boundaries | `docs/architecture.md` | ✅ |
 | CI pipeline builds and tests on every push | CI #1–#20; S0, S9 | ✅ |
 | Pipeline fails on a broken build | CI #4, S11 | ✅ |
-| SAST gate | `ci.yml` `sast` job; S5; `sast-semgrep-findings.md` | ✅ |
+| SAST gate | `ci.yml` `sast` job (**enforcing**); S5; `sast-semgrep-findings.md` | ✅ |
 | Dependency / SCA gate | `ci.yml` `dependency-scan`; S6a, S6b; `dependency-npm-audit.md` | ✅ |
 | Secrets scanning gate | `ci.yml` `secrets-scan`; S7; `secrets-gitleaks-baseline.md` | ✅ |
 | Container image scanning gate | `ci.yml` `container-scan`; S8; `container-trivy-split.md` | ✅ |
-| At least one **enforcing** gate | Gitleaks; `ci.yml` `secrets-scan` "Gate decision (ENFORCING)" | ✅ |
+| At least one **enforcing** gate | **Two**: Gitleaks (`secrets-scan`) and Semgrep (`sast`), both with a "Gate decision (ENFORCING)" step | ✅ |
 | **Captured evidence of it blocking a build** | **CI #15**; S1–S4 | ✅ |
 | GitHub Actions encrypted secrets | `ci.yml` workflow `env:` block; S12, S13; **CI #20** `Login Succeeded` | ✅ |
 | Pipeline gates pull requests, not just pushes | **CI #18** — PR #1 from a teammate; S16 | ✅ |
@@ -242,7 +244,7 @@ Things a marker could reasonably probe. Better to have answers ready.
 
 | # | Caveat | The honest answer |
 |---|---|---|
-| **C1** | Three of four gates are **report-only**, not enforcing | Deliberate. SAST, dependency and container findings are NodeGoat's *intentional* vulnerabilities, owned by the remediation workstream and required not to be fixed yet. Enforcing them would make `main` permanently red, and a pipeline that is always red gets ignored. Each gate's `exit 1` is present but commented, so enforcement is visibly deferred rather than absent. |
+| **C1** | Two of four gates are **report-only**, not enforcing | Deliberate. The dependency and container findings are NodeGoat's *intentional* vulnerable dependencies and base-image CVEs, which this pipeline is not permitted to fix. Enforcing them would make `main` permanently red, and a pipeline that is always red gets ignored. Both carry a commented `exit 1`. SAST was in this category until the remediation workstream genuinely fixed its ERROR findings, at which point it was switched on — see [`sast-semgrep-findings.md`](sast-semgrep-findings.md). |
 | **C2** | The Gitleaks baseline suppresses 2 real findings | It is a baseline, not a blanket suppression: entries are exact fingerprints (`commit:file:rule:line`), committed with written justification, and CI #15 proves new secrets are still caught while those 2 stay suppressed. |
 | **C3** | `npm audit` excludes dev dependencies | Stated openly and both numbers are printed (51 vs 145). The Dockerfile builds with `npm ci --omit=dev`, so dev dependencies are provably not in the runtime image. |
 | **C4** | CI #7 was an unplanned red run | A shell quoting bug, not a gate finding: an apostrophe in prose inside a single-quoted `node -e` script caused bash to exit 2. Fixed structurally with a quoted heredoc in CI #8. Worth keeping in the report — it shows the pipeline caught a real defect in its own configuration. |

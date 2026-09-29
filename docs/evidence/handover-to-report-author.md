@@ -8,9 +8,10 @@ Everything below is finished, pushed to `main`, and evidenced. This document
 tells you where each piece lives, what you can safely claim, and what you must
 not claim.
 
-**The other workstreams are not mine.** Member 2 owns the threat model and
-architecture diagram; Member 3 owns the vulnerability assessment and exploits.
-Ask them about those — I have not reviewed them and cannot vouch for them.
+**The other workstreams are not mine.** `IT24103261` owns the threat model and
+architecture diagram; `IT24102157` owns the vulnerability assessment and
+exploits; `IT24101532` made the application fixes. Ask them about those — I have
+not reviewed them and cannot vouch for them.
 
 ---
 
@@ -40,8 +41,8 @@ runs entirely offline. A GitHub Actions pipeline runs on every push and pull
 request: it lints, builds the container image, starts the full stack and runs
 an 8-assertion smoke test against it, and applies four security gates — Semgrep
 (SAST), npm audit (dependencies), Gitleaks (secrets), and Trivy (container
-image). Secrets were removed from source and are provisioned at runtime from
-the environment, with HashiCorp Vault as an optional source using AppRole
+image), two of which enforce. Secrets were removed from source and are
+provisioned at runtime from the environment, with HashiCorp Vault as an optional source using AppRole
 authentication.
 
 ---
@@ -59,14 +60,18 @@ All verified against real runs. **Cite the run and commit, not just the number.*
 | Smoke-test assertions | 8, all passing | CI #20 |
 | Total CI runs to date | 20+ | Actions tab |
 
-### Gate findings — all from CI #20, commit `530da90`
+### Gate findings
 
-| Gate | Tool | Findings |
-|---|---|---|
-| SAST | Semgrep | **15 total — 3 ERROR, 12 WARNING** |
-| Dependencies | npm audit | **51 production** (16 critical, 24 high, 5 moderate, 6 low) · **145 full tree** (38/66/33/8) |
-| Secrets | Gitleaks | **2 baselined, 0 new** — gate passes |
-| Container | Trivy | **9 critical, 58 high** — of which base image is **0 critical, 4 high** |
+| Gate | Tool | Findings | Enforces? |
+|---|---|---|---|
+| SAST | Semgrep | **0 ERROR, 11 WARNING** — was 15 total / 3 ERROR before remediation | **YES** |
+| Dependencies | npm audit | **51 production** (16 critical, 24 high, 5 moderate, 6 low) · **145 full tree** (38/66/33/8) | no |
+| Secrets | Gitleaks | **2 baselined, 0 new** — gate passes | **YES** |
+| Container | Trivy | **9 critical, 58 high** — of which base image is **0 critical, 4 high** | no |
+
+Dependency, secrets and container figures are from CI #20 (`530da90`). The SAST
+figure is post-remediation, verified at `69c03ca`; the pre-remediation figure is
+what screenshot S5 shows.
 
 ### The blocking run — CI #15, commit `b953365`
 
@@ -78,7 +83,7 @@ All verified against real runs. **Cite the run and commit, not just the number.*
 
 ---
 
-## 4. The four points worth making
+## 4. The points worth making
 
 If the report only has room for a few claims from this workstream, make these.
 
@@ -97,7 +102,26 @@ no matter what anyone committed.
 *This is the single best point in the workstream.* It shows the pipeline was
 verified rather than assumed.
 
-### 4.2 The enforcing gate demonstrably blocks a build
+### 4.2 The pipeline drove a real fix, then tightened
+
+Semgrep found NodeGoat's `eval()` code injection at
+`app/routes/contributions.js` as **3 ERROR findings**, using stock rulesets and
+no custom configuration. The gate was report-only then, because that
+vulnerability belonged to another workstream and enforcing would have left
+`main` permanently red.
+
+The fixes landed — `eval()` replaced with a validated numeric parser, and the
+`/learn` open redirect restricted. Re-scanned: **ERROR 3 to 0, total 15 to 11.**
+The gate was switched to **enforcing**, so a reintroduction now blocks the
+build. The scanner image was pinned in the same change, because an unpinned
+scanner behind an enforcing gate can redden `main` with no code change at all
+when a new rule ships upstream.
+
+**That is the whole DevSecOps loop, evidenced at both ends:** detect, fix,
+tighten. Before and after figures are in
+[`sast-semgrep-findings.md`](sast-semgrep-findings.md).
+
+### 4.3 The enforcing gate demonstrably blocks a build
 
 A randomly generated fake AWS credential was pushed to a throwaway branch.
 CI #15 went red on `secrets-scan` only — the credential was deliberately placed
@@ -112,7 +136,7 @@ suppression.
 Screenshots **S2** (blocked) and **S7** (passing) side by side make this point
 better than any paragraph.
 
-### 4.3 The Trivy layer split
+### 4.4 The Trivy layer split
 
 "67 critical and high findings in our image" is true but useless. The scan
 separates them:
@@ -126,7 +150,7 @@ Application dependencies (Node.js)   9 critical, 54 high
 else is NodeGoat's 2016-era dependency tree. This also retrospectively justifies
 the Phase 1 decision to move off the end-of-life `node:12-alpine`.
 
-### 4.4 Secrets are provisioned, not hardcoded
+### 4.5 Secrets are provisioned, not hardcoded
 
 Three-layer chain, no hardcoded fallback anywhere:
 
@@ -152,7 +176,7 @@ All in [`screenshots/`](screenshots/). Filenames carry their own run and commit.
 | Pipeline runs green, all gates present | **S0** |
 | Enforcing gate blocks a build | **S1, S2, S3, S4** |
 | Baseline suppresses known but catches new | **S2 + S7 together** |
-| SAST findings | **S5** |
+| SAST findings (pre-fix baseline) | **S5** |
 | Dependency scoping (51 vs 145) | **S6a**, then **S6b** for the criticals |
 | Container layer split | **S8** |
 | Smoke test against running stack | **S9** |
@@ -172,11 +196,11 @@ Getting these wrong is worse than omitting them.
 
 | Do not say | Say instead |
 |---|---|
-| "All four gates block the build" | **One** gate enforces (Gitleaks). The other three report. This was deliberate — their findings are NodeGoat's intentional vulnerabilities, which the remediation workstream is required not to fix yet. Enforcing them would leave `main` permanently red. |
+| "All four gates block the build" | **Two** enforce — Semgrep (ERROR severity) and Gitleaks (any finding). Dependency and container scanning report only, because their findings are NodeGoat's intentional vulnerable dependencies and base-image CVEs that this pipeline is not permitted to fix. |
 | "The pipeline prevents bad merges" | It **reports** on every push and pull request. Branch protection is **not enabled**, so nothing currently *prevents* a merge. The `ci-status` job exists so a single required check can be enabled. |
 | "npm test runs our tests" | `npm test` runs **zero** tests. It is kept and clearly labelled. The real verification is the 8-assertion smoke test. |
 | "Findings are in the GitHub Security tab" | They are not. Code scanning needs GitHub Advanced Security on private repos; `/security/code-scanning` returns 404. Findings go to job summaries and artifacts. |
-| "We fixed the vulnerabilities" | Not this workstream. No application code was changed. Ask Member 3. |
+| "We fixed the vulnerabilities" | Not this workstream — the infrastructure lead changed no application code. The fixes were made by `IT24101532`; the assessment and exploits by `IT24102157`. Ask them. |
 | "Vault fully solves secrets management" | It does not. Bootstrapping Vault still needs a token — the "secret zero" problem. Vault runs in dev mode: in-memory, auto-unsealed, no TLS. |
 
 ---
@@ -190,8 +214,8 @@ ones worth space:
 
 1. **Branch protection is not enabled** — the pipeline reports but does not
    prevent. The aggregating job was built so one required check could enable it.
-2. **Three of four gates are report-only** — deliberate, for the reason in §6
-   above.
+2. **Two of four gates are report-only** — deliberate, for the reason in §6
+   above. Semgrep left that category once its findings were genuinely fixed.
 3. **Vault runs in dev mode** — appropriate for a teaching lab, explicitly not
    production. Nine limitations are enumerated in `../secrets.md` §8.
 4. **Old secrets remain in git history** — deliberately not rewritten, because

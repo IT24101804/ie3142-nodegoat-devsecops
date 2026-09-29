@@ -5,7 +5,7 @@ Factual walkthrough of the CI pipeline for report-writing and viva preparation.
 **This is reference material, not report prose.** It is written to be accurate
 and answerable, not to be quoted. Write the report in your own words.
 
-Current at commit `b111bfb`. Pipeline definition: `.github/workflows/ci.yml`.
+Current at commit `9c2bb21`. Pipeline definition: `.github/workflows/ci.yml`.
 
 ---
 
@@ -14,7 +14,7 @@ Current at commit `b111bfb`. Pipeline definition: `.github/workflows/ci.yml`.
 - [1. The job graph](#1-the-job-graph)
 - [2. Why each dependency exists](#2-why-each-dependency-exists)
 - [3. The four security gates](#3-the-four-security-gates)
-- [4. Which gate enforces, and why that one](#4-which-gate-enforces-and-why-that-one)
+- [4. Which gates enforce, and why](#4-which-gates-enforce-and-why)
 - [5. Workflow-level decisions](#5-workflow-level-decisions)
 - [6. Honest limitations](#6-honest-limitations)
 - [7. Likely viva questions](#7-likely-viva-questions)
@@ -25,11 +25,13 @@ Current at commit `b111bfb`. Pipeline definition: `.github/workflows/ci.yml`.
 
 ```
 lint             ─────────────┐
-sast             ─────────────┤
+sast          ⚠  ─────────────┤
 dependency-scan  ─────────────┤──►  ci-status
-secrets-scan ⚠   ─────────────┤
+secrets-scan  ⚠  ─────────────┤
 build ──┬─► smoke-test ───────┤
         └─► container-scan ───┘
+
+⚠ = enforcing (fails the build)
 ```
 
 Eight jobs. **One** real dependency edge shape: everything is parallel except
@@ -42,7 +44,7 @@ which needs everything.
 |---|---|---|
 | Lint and static checks | 23s | — |
 | Build container image | 25s | — |
-| Security - SAST (Semgrep) | 32s | — |
+| Security - SAST (Semgrep) **[ENFORCING]** | 32s | — |
 | Security - Dependency scan (npm audit) | 20s | — |
 | Security - Secrets scan (Gitleaks) **[ENFORCING]** | 7s | — |
 | Smoke test the running stack | 52s | `build` |
@@ -107,12 +109,15 @@ pass.
 
 ## 3. The four security gates
 
-| Gate | Tool | Threshold | Enforces? | Findings (CI #14) |
+| Gate | Tool | Threshold | Enforces? | Current findings |
 |---|---|---|---|---|
-| SAST | Semgrep | ERROR | No | 3 ERROR, 12 WARNING |
+| **SAST** | **Semgrep** (pinned 1.176.1) | **ERROR** | **YES** | **0 ERROR**, 11 WARNING |
 | Dependency / SCA | npm audit | critical, `--omit=dev` | No | 16 critical, 24 high (51 total) |
-| **Secrets** | **Gitleaks** | **any finding** | **YES** | 2 baselined, 0 new |
-| Container image | Trivy | CRITICAL + HIGH | No | 9 critical, 58 high |
+| **Secrets** | **Gitleaks** (pinned v8.30.1) | **any finding** | **YES** | 2 baselined, 0 new |
+| Container image | Trivy (pinned 0.74.0) | CRITICAL + HIGH | No | 9 critical, 58 high |
+
+**Two of four gates enforce.** SAST became enforcing on 2026-09-29, once the
+remediation workstream had removed its ERROR findings — see [§4](#4-which-gates-enforce-and-why).
 
 Detailed findings: [`sast-semgrep-findings.md`](sast-semgrep-findings.md),
 [`dependency-npm-audit.md`](dependency-npm-audit.md),
@@ -127,14 +132,18 @@ and a second config purely for CI. Semgrep needs no project config, ships
 curated Express/Node rulesets (`p/javascript`, `p/nodejs`, `p/owasp-top-ten`),
 and emits SARIF natively.
 
-**Why the threshold is ERROR:** the noise is asymmetric. 5 of the 12 WARNINGs
-are `plaintext-http-link` — `http://` hyperlinks in *tutorial documentation
-pages*, not application traffic. That is ~33% noise at WARNING level and **0% at
-ERROR level**. Setting the bar at ERROR is a measured decision, not a default.
+**Why the threshold is ERROR:** the noise is asymmetric. 5 of the 11 remaining
+WARNINGs are `plaintext-http-link` — `http://` hyperlinks in *tutorial
+documentation pages*, not application traffic. That is roughly 45% noise at
+WARNING level and **0% at ERROR level**. Setting the bar at ERROR is a measured
+decision, not a default, and it is why the gate could be made enforcing without
+also becoming a nuisance.
 
-**What it found:** the 3 ERRORs are `code-string-concat` at
+**What it found:** originally 3 ERRORs, all `code-string-concat` at
 `app/routes/contributions.js:32-34` — NodeGoat's **`eval()` code injection**, its
-flagship OWASP A1 vulnerability. Stock rulesets, no custom rules.
+flagship OWASP A1 vulnerability. Stock rulesets, no custom rules. Those findings
+were fixed by the remediation workstream and the count is now **0**; the full
+before/after is in [`sast-semgrep-findings.md`](sast-semgrep-findings.md).
 
 ### 3.2 Dependency / SCA — npm audit
 
@@ -154,7 +163,7 @@ effect of the scoping is visible. That is the distinction to hold onto:
 **scoping with a stated reason and both numbers shown is tuning; reporting 51
 alone would be suppression.**
 
-### 3.3 Secrets — Gitleaks *(the enforcing gate — see §4)*
+### 3.3 Secrets — Gitleaks *(enforcing — see §4)*
 
 **Why the container and not `gitleaks-action`:** the action requires a
 `GITLEAKS_LICENSE` for organization accounts. The container keeps the pipeline
@@ -192,11 +201,33 @@ are the only findings in the image that are actionable within this workstream.
 
 ---
 
-## 4. Which gate enforces, and why that one
+## 4. Which gates enforce, and why
 
-**Gitleaks enforces. The other three report.**
+**Gitleaks and Semgrep enforce. Dependency and container scanning report.**
 
-### Why Gitleaks is the right choice
+### Semgrep — became enforcing once the ERRORs were fixed
+
+It started report-only: its 3 ERROR findings were `code-string-concat` at
+`app/routes/contributions.js`, NodeGoat's deliberate `eval()` code injection.
+Enforcing then would have left `main` permanently red over code this pipeline
+was not permitted to change.
+
+The remediation workstream removed it (`c0e4576`, replacing `eval()` with a
+validated numeric parser) and restricted the `/learn` open redirect (`984473c`).
+Verified afterwards: **ERROR 0, total 15 → 11.** The gate was then switched on,
+so a reintroduction now blocks the build.
+
+**The scanner image was pinned in the same change.** Semgrep was the only one
+still on `:latest`. An unpinned scanner behind an enforcing gate can redden
+`main` with no code change at all, just because a new rule shipped. Enforcement
+and reproducibility have to arrive together — a good point to make if asked what
+you would watch out for.
+
+**This is the DevSecOps loop closing**, and it is the strongest narrative the
+pipeline offers: the gate *detected* a real vulnerability, the team *fixed* it,
+and the gate was then *tightened* so it cannot come back.
+
+### Gitleaks — enforcing from the start
 
 | Reason | Detail |
 |---|---|
@@ -204,11 +235,10 @@ are the only findings in the image that are actionable within this workstream.
 | **Near-zero noise** | 2 precise findings on this repository, both known and understood. |
 | **No conflict with other workstreams** | A *new* secret is never intentional NodeGoat behaviour. SAST, dependency and container findings **are** intentional, and teammates are required not to fix them yet. |
 
-That third row is the substance of the argument. Enforcing SAST would make
-`main` permanently red over `eval()` code injection that the remediation
-workstream is deliberately preserving. A pipeline that is always red gets
-ignored — which is a *worse* security outcome than no gate, and you cannot
-honestly call it passing.
+That third row was the substance of the argument at the time. It still applies
+to the dependency and container gates, whose findings remain the intentional
+ones. It no longer applies to SAST, because those findings were genuinely fixed
+rather than merely tolerated.
 
 ### Baseline, not suppression
 
@@ -332,7 +362,7 @@ evidenced: CI #12 (fallback) and CI #20 (`Login Succeeded`).
 
 | # | Limitation | Position |
 |---|---|---|
-| L1 | Three of four gates do not enforce | Deliberate and documented; see §4. Each `exit 1` is present but commented. |
+| L1 | Two of four gates do not enforce | Deliberate: the dependency and container findings are NodeGoat's intentional vulnerable dependencies and base-image CVEs, which this pipeline is not permitted to fix. Each carries a commented `exit 1`. SAST was in this category until its findings were genuinely fixed, at which point it was switched on. |
 | L2 | The baseline suppresses 2 real findings | Fingerprint-scoped, justified in-file, and CI #15 proves new secrets are still caught. |
 | L3 | `npm audit` excludes dev dependencies | Both numbers printed; the runtime image provably excludes them. |
 | L4 | `npm test` runs zero tests | Labelled, not hidden. Smoke test is the real verification. |
@@ -361,11 +391,15 @@ waits for build, loads the image artifact it produced, brings up the full stack
 with `docker compose --wait`, and runs 8 assertions. ci-status then aggregates
 everything. About 90 seconds end to end.
 
-**"Which gate blocks, and why only that one?"**
-Gitleaks. A leaked credential is binary — there is no acceptable number. The
-other three find NodeGoat's *intentional* vulnerabilities, which the remediation
-workstream is required not to fix yet, so enforcing them would leave main
-permanently red and the pipeline would be ignored.
+**"Which gates block, and why not all of them?"**
+Gitleaks and Semgrep. A leaked credential is binary — there is no acceptable
+number — so Gitleaks enforced from the start. Semgrep started report-only
+because its findings were NodeGoat's intentional `eval()` injection; once the
+remediation workstream actually fixed that, the ERROR count hit 0 and the gate
+was switched on. The dependency and container gates still report, because their
+findings are the intentional vulnerable dependencies and base-image CVEs this
+pipeline is not permitted to fix — enforcing those would leave main permanently
+red, and a pipeline that is always red gets ignored.
 
 **"Isn't your baseline just suppression?"**
 No, and CI #15 demonstrates it: the same scan reported `Baselined: 2` and
@@ -387,6 +421,15 @@ inside a single-quoted `node -e` script caused bash to exit 2. Fixed
 structurally in CI #8 by moving the script into a quoted heredoc, which cannot
 be broken by its own text. Worth keeping — the pipeline caught a real defect in
 its own configuration.
+
+**"You changed a gate from report-only to enforcing — talk me through that."**
+Semgrep found the `eval()` injection at `contributions.js` as 3 ERROR findings.
+Enforcing then would have blocked every build over a vulnerability another
+workstream owned and was required not to fix yet, so it stayed report-only with
+the `exit 1` commented and the reason written above it. Once they fixed it I
+re-ran the scanner, confirmed ERROR was 0, and switched the gate on — pinning
+the scanner image in the same change, because an unpinned scanner behind an
+enforcing gate can redden main with no code change at all when a new rule ships.
 
 **"What would you do differently with more time?"**
 Enable branch protection on `ci-status`; enforce Trivy's OS-level CRITICAL
