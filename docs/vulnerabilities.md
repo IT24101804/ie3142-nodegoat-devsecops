@@ -1,322 +1,241 @@
-# Vulnerability Assessment & Secure Coding Evidence — IE3142 NodeGoat DevSecOps
+# Vulnerability Assessment & Secure Coding Evidence — IE3142 NodeGoat DevSecOps[cite: 2]
 
-**Target application:** OWASP NodeGoat (`http://localhost:4000`)
-**Assessed by:** Karthiban S (IT24102157)
-**Handoff to:** Ahamad R R (IT24101532) — secure coding fixes and re-verification
-
-## Scope and method
-
-This document records offensive testing performed against the unmodified,
-containerised NodeGoat application prior to any secure coding fixes. A
-baseline static application security testing (SAST) scan was run first,
-followed by manual exploitation covering every threat identified in
-`docs/threat-model.md` (T1–T12). All twelve threats have been confirmed as
-working exploits against the unmodified application.
-
-- **SAST tool used (local baseline):** Semgrep, `semgrep --config=auto`
-- **Local baseline finding count:** 38
-
-> **Note on SAST baseline reconciliation.** This 38-finding baseline was
-> produced with `--config=auto` run locally. The project's CI pipeline
-> (`.github/workflows/ci.yml`, `sast` job) runs Semgrep with a different,
-> pinned configuration (`p/javascript`, `p/nodejs`, `p/owasp-top-ten`,
-> excluding `app/assets/vendor`). The two are **separate scans with different
-> scope and will not produce the same count.** The Technical Report should
-> either (a) re-run the post-fix comparison against the pipeline's own config
-> so the reported diff matches what CI actually enforces, or (b) present both
-> baselines explicitly labelled as separate, so the numbers don't appear
-> inconsistent to a reader.
-
-![Baseline Semgrep terminal output](evidence/exploits/sast-baseline-semgrep-terminal.png)
-
-*Figure 1 — Baseline Semgrep terminal output (local `--config=auto` run, 38 findings)*
+**Target application:** OWASP NodeGoat (`http://localhost:4000`)[cite: 2]  
+**Assessed by:** Karthiban S (IT24102157)[cite: 2]  
+**Handoff to:** Ahamad R R (IT24101532) — secure coding fixes and re-verification[cite: 2]  
 
 ---
 
-## 1. STRIDE and OWASP Category Mapping (cross-reference to `docs/threat-model.md`)
+## Scope and Method[cite: 2]
 
-Every threat in the threat model corresponds to an OWASP Top 10 category
-(A1–A8) and has been fully demonstrated.
+This document records offensive testing performed against the unmodified, containerised NodeGoat application prior to any secure coding fixes[cite: 2]. A baseline static application security testing (SAST) scan was run first, followed by manual exploitation covering every application-layer threat identified in `docs/threat-model.md` (T1–T12)[cite: 2]. All twelve have been confirmed as working exploits against the unmodified application[cite: 2]. T13 (AppRole credential flow compromise) is an infrastructure-level threat and was not exploited — see `docs/threat-model.md`, Section 3, for the rationale[cite: 2].
+
+* **SAST tool:** Semgrep[cite: 2]
+* **Primary baseline (CI-enforced):** 15 findings (3 ERROR, 12 WARNING) — CI #20, commit `530da90`, using the pipeline’s pinned configuration (`p/javascript`, `p/nodejs`, `p/owasp-top-ten`, excluding `app/assets/vendor`)[cite: 2]. This is the number the Technical Report’s before/after SAST comparison should use, since it reflects the scan actually enforced by the DevSecOps pipeline[cite: 2].
+* **Secondary, non-enforced local scan:** 38 findings, produced locally with Semgrep’s broader `--config=auto` ruleset[cite: 2]. This scan has wider scope than the pipeline’s configuration and is not directly comparable to the CI number above — it is included only for completeness and should not be used in a before/after comparison against a CI-based “after” scan[cite: 2].
+
+![Baseline Semgrep Terminal Output](Scan%20Summary.png)  
+*Figure 1 — Local Semgrep terminal output (`--config=auto` run, 38 findings — secondary/non-enforced scan; see note above)*[cite: 2]
+
+---
+
+## 1. STRIDE and OWASP Category Mapping (cross-reference to `docs/threat-model.md`)[cite: 2]
+
+Every application-layer threat in the threat model corresponds to an OWASP Top 10 category (A1–A8) and has been fully demonstrated[cite: 2]. T13 is an infrastructure-level threat and is not exploited (see `docs/threat-model.md`)[cite: 2].
 
 | Threat Model ID | OWASP Category | Vulnerability Title | Exploitation Status |
-|---|---|---|---|
-| T1 | A2.2 | Username Enumeration | ✅ Demonstrated (Section 4) |
-| T2 | A5 | Unauthenticated MongoDB Connection | ✅ Demonstrated (Section 2) |
-| T3 | A8 | Disabled CSRF Protection | ✅ Demonstrated (Section 2) |
-| T4 | A5 | Clickjacking / Disabled Frame Protection | ✅ Demonstrated (Section 2) |
-| T5 | A1 | NoSQL Injection | ✅ Demonstrated (Section 2) |
-| T6 | A2.1 | Plaintext Password Storage | ✅ Demonstrated (Section 4) |
-| T7 | A2.3 | Insecure Cookie Attributes | ✅ Demonstrated (Section 4) |
-| T8 | A2.4 | Weak Password Policy | ✅ Demonstrated (Section 4) |
-| T9 | A2.5 | Missing Session Idle Timeout | ✅ Demonstrated (Section 4) |
-| T10 | A3 | Stored XSS | ✅ Demonstrated (Section 2) |
-| T11 | A4 | Insecure Direct Object Reference | ✅ Demonstrated (Section 2) |
-| T12 | A7 | Missing Function-Level Access Control | ✅ Demonstrated (Section 2) |
+| :--- | :--- | :--- | :--- |
+| **T1** | A2.2 | Username Enumeration | ✅ Demonstrated (Section 4)[cite: 2] |
+| **T2** | A5 | Unauthenticated MongoDB Connection | ✅ Demonstrated (Section 2)[cite: 2] |
+| **T3** | A8 | Disabled CSRF Protection | ✅ Demonstrated (Section 2)[cite: 2] |
+| **T4** | A5 | Clickjacking / Disabled Frame Protection | ✅ Demonstrated (Section 2)[cite: 2] |
+| **T5** | A1 | NoSQL Injection | ✅ Demonstrated (Section 2)[cite: 2] |
+| **T6** | A2.1 | Plaintext Password Storage | ✅ Demonstrated (Section 4)[cite: 2] |
+| **T7** | A2.3 | Insecure Cookie Attributes | ✅ Demonstrated (Section 4)[cite: 2] |
+| **T8** | A2.4 | Weak Password Policy | ✅ Demonstrated (Section 4)[cite: 2] |
+| **T9** | A2.5 | Missing Session Idle Timeout | ✅ Demonstrated (Section 4)[cite: 2] |
+| **T10** | A3 | Stored XSS | ✅ Demonstrated (Section 2)[cite: 2] |
+| **T11** | A4 | Insecure Direct Object Reference | ✅ Demonstrated (Section 2)[cite: 2] |
+| **T12** | A7 | Missing Function-Level Access Control | ✅ Demonstrated (Section 2)[cite: 2] |
+| **T13** | — | AppRole Credential Flow Compromise | ⬛ Identified, not exploited (infrastructure-level — see `docs/threat-model.md`)[cite: 2] |
 
 ---
 
-## 2. Core vulnerabilities (exploit-and-fix set)
+## 2. Core Vulnerabilities (exploit-and-fix set)[cite: 2]
 
-### A1 — NoSQL Injection (Server-Side JavaScript) — T5
+### A1 — NoSQL Injection (Server-Side JavaScript) — T5[cite: 2]
 
-- **Target endpoint:** `/allocations` → Stocks Threshold field
-- **Attack method:** Submitted a payload that alters the underlying MongoDB
-  query logic: `1'; return 1 == '1`
-- **Observed impact:** Overrides the query filter constraint and returns
-  unauthorised database records belonging to other users.
-- **Vulnerable location:** `app/data/allocations-dao.js`,
-  `getByUserIdAndThreshold` — the `threshold` parameter is interpolated
-  directly into a `$where` clause without validation.
-- **Required remediation:** Replace raw string evaluation with explicit
-  numeric casting (`parseInt`) and a bounds check before the value reaches
-  the query.
+* **Target endpoint:** `/allocations` → Stocks Threshold field[cite: 2]
+* **Attack method:** Submitted a payload that alters the underlying MongoDB query logic: `1'; return 1 == '1`[cite: 2]
+* **Observed impact:** Overrides the query filter constraint and returns unauthorised database records belonging to other users[cite: 2].
+* **Vulnerable location:** `app/data/allocations-dao.js`, `getByUserIdAndThreshold` — the threshold parameter is interpolated directly into a `$where` clause without validation[cite: 2].
+* **Required remediation:** Replace raw string evaluation with explicit numeric casting (`parseInt`) and a bounds check before the value reaches the query[cite: 2].
 
-![NoSQL injection payload submission](evidence/exploits/a1-nosqli-payload-submission.png)
+![NoSQL Injection Payload Submission](NoSQL_injection_payload_submission.png)  
+*Figure 2 — Submitting the payload in the Threshold field*[cite: 2]
 
-*Figure 2 — Submitting the payload in the Threshold field*
+![NoSQL Injection Unauthorized Records Returned](NoSQL_injection_unauthorized_records_returned.png)  
+*Figure 3 — Query returns unauthorised database records for all users*[cite: 2]
 
-![NoSQL injection unauthorized records returned](evidence/exploits/a1-nosqli-unauthorized-records.png)
+* **Secondary instance — Denial of Service via the same field:** Submitting `';while(true){};` into the same `$where`-evaluated field traps the Node.js event loop until MongoDB aborts execution[cite: 2]. Same vulnerable location and same fix (removing dynamic `$where` string evaluation resolves both)[cite: 2].
 
-*Figure 3 — Query returns unauthorised database records for all users*
+![DoS Payload Submission](DoS_payload_submission.png)  
+*Figure 4 — Submitting an infinite-loop payload*[cite: 2]
 
-**Secondary instance — Denial of Service via the same field:**
-Submitting `';while(true){};` into the same `$where`-evaluated field traps
-the Node.js event loop until MongoDB aborts execution. Same vulnerable
-location and same fix (removing dynamic `$where` string evaluation resolves
-both).
-
-![DoS payload submission](evidence/exploits/a1-nosqli-dos-payload.png)
-
-*Figure 4 — Submitting an infinite-loop payload*
-
-![MongoDB aborting execution](evidence/exploits/a1-nosqli-mongodb-abort.png)
-
-*Figure 5 — MongoDB aborts execution after the payload runs*
+![MongoDB Aborting Execution](MongoDB_aborting_execution.png)  
+*Figure 5 — MongoDB aborts execution after the payload runs*[cite: 2]
 
 ---
 
-### A3 — Stored Cross-Site Scripting (XSS) — T10
+### A3 — Stored Cross-Site Scripting (XSS) — T10[cite: 2]
 
-- **Target endpoint:** `/profile` → First Name / Last Name fields
-- **Attack method:** Injected `<script>alert('XSS Exploit')</script>` into
-  editable profile fields.
-- **Observed impact:** Payload persists in MongoDB and renders unescaped in
-  the navigation header, executing JavaScript in the browser of any user who
-  navigates the affected pages.
-- **Vulnerable location:** `server.js` — Swig template engine initialised
-  with `autoescape: false`.
-- **Required remediation:** Set `swig.setDefaults({ autoescape: true })` and
-  apply input sanitisation before database insertion.
+* **Target endpoint:** `/profile` → First Name / Last Name fields[cite: 2]
+* **Attack method:** Injected `<script>alert('XSS Exploit')</script>` into editable profile fields[cite: 2].
+* **Observed impact:** Payload persists in MongoDB and renders unescaped in the navigation header, executing JavaScript in the browser of any user who navigates the affected pages[cite: 2].
+* **Vulnerable location:** `server.js` — Swig template engine initialised with `autoescape: false`[cite: 2].
+* **Required remediation:** Set `swig.setDefaults({ autoescape: true })` and apply input sanitisation before database insertion[cite: 2].
 
-![XSS payload injected into last name field](evidence/exploits/a3-xss-payload-injection.png)
+![XSS Payload Injected](XSS_payload_injected_into_last_name_field.png)  
+*Figure 6 — Injecting a script tag into the Last Name field*[cite: 2]
 
-*Figure 6 — Injecting a script tag into the Last Name field*
-
-![XSS payload executing](evidence/exploits/a3-xss-execution-popup.png)
-
-*Figure 7 — Pop-up confirming script execution when navigating pages*
+![XSS Payload Executing](XSS_payload_executing.png)  
+*Figure 7 — Pop-up confirming script execution when navigating pages*[cite: 2]
 
 ---
 
-### A4 — Insecure Direct Object Reference (IDOR) — T11
+### A4 — Insecure Direct Object Reference (IDOR) — T11[cite: 2]
 
-- **Target endpoint:** `/allocations/{userId}`
-- **Attack method:** Authenticated as a standard user (`userId=2`), then
-  manually changed the URL path to `/allocations/1`.
-- **Observed impact:** Server returns the Administrator's allocation
-  details without verifying the route parameter against the authenticated
-  session.
-- **Vulnerable location:** `app/routes/allocations.js`,
-  `displayAllocations` — the handler trusts `req.params.userId` instead of
-  `req.session.userId`.
-- **Required remediation:** Source the user identifier from
-  `req.session.userId` server-side rather than the URL parameter.
+* **Target endpoint:** `/allocations/{userId}`[cite: 2]
+* **Attack method:** Authenticated as a standard user (`userId=2`), then manually changed the URL path to `/allocations/1`[cite: 2].
+* **Observed impact:** Server returns the Administrator’s allocation details without verifying the route parameter against the authenticated session[cite: 2].
+* **Vulnerable location:** `app/routes/allocations.js`, `displayAllocations` — the handler trusts `req.params.userId` instead of `req.session.userId`[cite: 2].
+* **Required remediation:** Source the user identifier from `req.session.userId` server-side rather than the URL parameter[cite: 2].
 
-![IDOR URL tampering](evidence/exploits/a4-idor-url-tampering.png)
+![IDOR URL Tampering](IDOR_URL_tampering.png)  
+*Figure 8 — Authenticated as a standard user, manually navigating to another user’s allocation URL*[cite: 2]
 
-*Figure 8 — Authenticated as a standard user, manually navigating to another user's allocation URL*
-
-![Insecure code path](evidence/exploits/a4-idor-code.png)
-
-*Figure 9 — The insecure direct object reference in the route handler*
+![Insecure Code Path](Insecure_code_path.png)  
+*Figure 9 — The insecure direct object reference in the route handler*[cite: 2]
 
 ---
 
-### A7 — Missing Function-Level Access Control — T12
+### A7 — Missing Function-Level Access Control — T12[cite: 2]
 
-- **Target endpoint:** `/benefits` (administrative dashboard)
-- **Vulnerable files:** `app/routes/index.js`, `app/routes/admin.js`
-- **Attack method:** Authenticated as a standard non-administrative user and
-  navigated directly to `http://localhost:4000/benefits`.
-- **Observed impact:** The application renders administrative controls and
-  allows data modification without checking `req.session.user.isAdmin`.
-- **Vulnerable location:** `app/routes/index.js` — the `/benefits` routes
-  are registered with `isLoggedIn` only; the `isAdmin` middleware exists but
-  is not attached.
-- **Required remediation:** Attach `isAdmin` alongside `isLoggedIn` on both
-  the `GET` and `POST` `/benefits` route handlers.
+* **Target endpoint:** `/benefits` (administrative dashboard)[cite: 2]
+* **Vulnerable files:** `app/routes/index.js`, `app/routes/admin.js`[cite: 2]
+* **Attack method:** Authenticated as a standard non-administrative user and navigated directly to `http://localhost:4000/benefits`[cite: 2].
+* **Observed impact:** The application renders administrative controls and allows data modification without checking `req.session.user.isAdmin`[cite: 2].
+* **Vulnerable location:** `app/routes/index.js` — the `/benefits` routes are registered with `isLoggedIn` only; the `isAdmin` middleware exists but is not attached[cite: 2].
+* **Required remediation:** Attach `isAdmin` alongside `isLoggedIn` on both the GET and POST `/benefits` route handlers[cite: 2].
 
-![Standard user reaching the admin dashboard](evidence/exploits/a7-access-control-bypass.png)
-
-*Figure 10 — A standard user navigating directly to `/benefits` and modifying data*
+![Standard User Reaching Admin Dashboard](Standard_user_reaching_the_admin_dashboard.png)  
+*Figure 10 — A standard user navigating directly to /benefits and modifying data*[cite: 2]
 
 ---
 
-## 3. Additional core vulnerabilities — T2, T3, T4
+## 3. Additional Core Vulnerabilities — T2, T3, T4[cite: 2]
 
-These three complete the coverage of every threat in `docs/threat-model.md`.
+These three complete the coverage of every application-layer threat in `docs/threat-model.md`[cite: 2].
 
-### A5 — Unauthorised Access Through an Unauthenticated MongoDB Connection — T2
+### A5 — Unauthorised Access Through an Unauthenticated MongoDB Connection — T2[cite: 2]
 
-- **Target:** `nodegoat-mongo`, reachable only within the private
-  `nodegoat-net` Docker network
-- **Attack method:** Started a temporary container attached to the same
-  Docker network as the application and connected directly to MongoDB with
-  no credentials:
-  ```
+* **Target:** `nodegoat-mongo`, reachable only within the private `nodegoat-net` Docker network[cite: 2]
+* **Attack method:** Started a temporary container attached to the same Docker network as the application and connected directly to MongoDB with no credentials[cite: 2]:
+  ```bash
   docker run -it --rm --network nodegoat-net mongo:4.4 mongo --host mongo --eval "db.getSiblingDB('nodegoat').users.find().toArray()"
-  ```
-- **Observed impact:** Returned all database user records, including
-  plaintext passwords, completely bypassing authentication controls.
-- **Vulnerable location:** `docker-compose.yml` — the MongoDB instance
-  lacks explicit authentication enforcement
-  (`MONGO_INITDB_ROOT_USERNAME`/`PASSWORD`).
-- **Required remediation:** Enable MongoDB authentication, create a
-  dedicated least-privilege database user, and pass credentials securely
-  via environment variables sourced from the project's secrets-management
-  mechanism.
+  ```[cite: 2]
+* **Observed impact:** Returned all database user records, including plaintext passwords, completely bypassing authentication controls[cite: 2].
+* **Vulnerable location:** `docker-compose.yml` — the MongoDB instance lacks explicit authentication enforcement (`MONGO_INITDB_ROOT_USERNAME/PASSWORD`)[cite: 2].
+* **Required remediation:** Enable MongoDB authentication, create a dedicated least-privilege database user, and pass credentials securely via environment variables sourced from the project’s secrets-management mechanism[cite: 2].
 
-![Unauthenticated MongoDB access](evidence/exploits/t2-mongo-unauthenticated-access.png)
-
-*Figure 11 — Connecting directly to MongoDB from another container on the same network, with no credentials, and retrieving user records*
+![Unauthenticated MongoDB Access](Unauthenticated_MongoDB_access.png)  
+*Figure 11 — Connecting directly to MongoDB from another container on the same network, with no credentials, and retrieving user records*[cite: 2]
 
 ---
 
-### A8 — Unauthorised State Change Through Disabled CSRF Protection — T3
+### A8 — Unauthorised State Change Through Disabled CSRF Protection — T3[cite: 2]
 
-- **Target endpoint:** `/contributions`
-- **Attack method:** Logged into NodeGoat, then opened an external local
-  HTML file containing an auto-submitting form targeting
-  `http://localhost:4000/contributions` with modified allocation values —
-  no interaction with the real NodeGoat form required.
-- **Observed impact:** Contribution values were modified successfully
-  without user interaction on the legitimate form, confirming that
-  cross-site requests are processed blindly.
-- **Vulnerable location:** `server.js` — the `csurf` import and middleware
-  initialisation are commented out.
-- **Required remediation:** Enable the `csurf` middleware, generate CSRF
-  tokens for form views, and enforce token validation on all
-  state-changing POST requests.
+* **Target endpoint:** `/contributions`[cite: 2]
+* **Attack method:** Logged into NodeGoat, then opened an external local HTML file containing an auto-submitting form targeting `http://localhost:4000/contributions` with modified allocation values — no interaction with the real NodeGoat form required[cite: 2].
+* **Observed impact:** Contribution values were modified successfully without user interaction on the legitimate form, confirming that cross-site requests are processed blindly[cite: 2].
+* **Vulnerable location:** `server.js` — the `csurf` import and middleware initialisation are commented out[cite: 2].
+* **Required remediation:** Enable the `csurf` middleware, generate CSRF tokens for form views, and enforce token validation on all state-changing POST requests[cite: 2].
 
-![Forged CSRF request page](evidence/exploits/t3-csrf-forged-page.png)
+![Forged CSRF Request Page](Forged_CSRF_request_page.png)  
+*Figure 12 — The forged HTML page used to submit an unauthorised request*[cite: 2]
 
-*Figure 12 — The forged HTML page used to submit an unauthorised request*
-
-![Contributions changed before and after](evidence/exploits/t3-csrf-before-after.png)
-
-*Figure 13 — Contributions page values modified via the external CSRF request*
+![Contributions Changed Before and After](Contributions_changed_before_and_after.png)  
+*Figure 13 — Contributions page values modified via the external CSRF request*[cite: 2]
 
 ---
 
-### A5 — Clickjacking Through Disabled Frame Protection — T4
+### A5 — Clickjacking Through Disabled Frame Protection — T4[cite: 2]
 
-- **Target endpoint:** `/dashboard` (global layout)
-- **Attack method:** Embedded the NodeGoat application inside an HTML
-  inline frame (`<iframe src="http://localhost:4000/dashboard">`) hosted
-  on a local test page.
-- **Observed impact:** The dashboard rendered fully inside the
-  third-party iframe without browser refusal, enabling UI redressing and
-  clickjacking attacks.
-- **Vulnerable location:** `server.js` — Helmet's `frameguard()` security
-  header module is commented out.
-- **Required remediation:** Enable Helmet's frame protection
-  (`helmet.frameguard({ action: "deny" })`) or configure a Content
-  Security Policy `frame-ancestors 'none'` header.
+* **Target endpoint:** `/dashboard` (global layout)[cite: 2]
+* **Attack method:** Embedded the NodeGoat application inside an HTML inline frame (`<iframe src="http://localhost:4000/dashboard">`) hosted on a local test page[cite: 2].
+* **Observed impact:** The dashboard rendered fully inside the third-party iframe without browser refusal, enabling UI redressing and clickjacking attacks[cite: 2].
+* **Vulnerable location:** `server.js` — Helmet’s `frameguard()` security header module is commented out[cite: 2].
+* **Required remediation:** Enable Helmet’s frame protection (`helmet.frameguard({ action: "deny" })`) or configure a Content Security Policy `frame-ancestors 'none'` header[cite: 2].
 
-![NodeGoat rendered inside an attacker-controlled iframe](evidence/exploits/t4-clickjacking-iframe.png)
-
-*Figure 14 — NodeGoat's dashboard loading inside a third-party iframe with no restriction*
+![NodeGoat Rendered Inside Frame](NodeGoat_rendered_inside_an_attacker-controlled_iframe.png)  
+*Figure 14 — NodeGoat’s dashboard loading inside a third-party iframe with no restriction*[cite: 2]
 
 ---
 
-## 4. Additional secure coding findings (audit-based, not full exploit cycles)
+## 4. Additional Secure Coding Findings (audit-based, not full exploit cycles)[cite: 2]
 
-These are real weaknesses, identified by code/configuration audit with
-supporting evidence, but without the same attack-and-reattempt cycle as
-Sections 2 and 3. Each corresponds to a threat in `docs/threat-model.md`.
+These are real weaknesses, identified by code/configuration audit with supporting evidence, but without the same attack-and-reattempt cycle as Sections 2 and 3[cite: 2]. Each corresponds to a threat in `docs/threat-model.md`[cite: 2].
 
-### A2.1 — Plaintext Password Storage — T6
+### A2.1 — Plaintext Password Storage — T6[cite: 2]
 
-- **Location:** `app/data/user-dao.js` (`addUser`, `validateLogin`)
-- **Finding:** Passwords are stored and compared using direct string
-  equality (`===`); the bcrypt-based fix exists in the codebase but is
-  commented out.
+* **Location:** `app/data/user-dao.js` (`addUser`, `validateLogin`)[cite: 2]
+* **Finding:** Passwords are stored and compared using direct string equality (`===`); the bcrypt-based fix exists in the codebase but is commented out[cite: 2].
 
-![Plaintext password storage code](evidence/exploits/a2-plaintext-password-code.png)
+![Plaintext Password Storage Code](Plaintext_password_storage_code.png)  
+*Figure 15 — `addUser` storing the password with no hashing*[cite: 2]
 
-*Figure 15 — `addUser` storing the password with no hashing*
-
-![Plaintext password comparison code](evidence/exploits/a2-plaintext-password-db.png)
-
-*Figure 16 — `validateLogin` comparing passwords with `===` instead of a hash check*
-
-### A2.2 — Username Enumeration — T1
-
-- **Location:** `/login`
-- **Finding:** Distinct error messages for an invalid username versus an
-  invalid password allow account discovery.
-
-![Invalid username response](evidence/exploits/a2-username-enum-invalid-user.png)
-
-*Figure 17 — "Invalid username" response*
-
-![Invalid password response](evidence/exploits/a2-username-enum-invalid-password.png)
-
-*Figure 18 — "Invalid password" response for a known username*
-
-### A2.3 — Insecure Cookie Attributes — T7
-
-- **Location:** `server.js` session configuration
-- **Finding:** The session cookie is missing the `Secure` attribute,
-  confirmed via browser developer tools.
-
-![Insecure cookie flags](evidence/exploits/a2-insecure-cookie-flag.png)
-
-*Figure 19 — Session cookie inspected via DevTools, `Secure` not set*
-
-### A2.4 — Weak Password Policy — T8
-
-- **Location:** `app/routes/session.js` (`PASS_RE = /^.{1,20}$/`)
-- **Finding:** A one-character password was successfully registered and
-  used to log in.
-
-![Weak password accepted at signup](evidence/exploits/a2-weak-password-signup.png)
-
-*Figure 20 — Registering an account with a single-character password*
-
-![Weak password accepted at login](evidence/exploits/a2-weak-password-login.png)
-
-*Figure 21 — Successfully logging in with the same weak password*
-
-### A2.5 — Missing Session Idle Timeout — T9
-
-- **Location:** `server.js` session configuration
-- **Finding:** No `maxAge` is configured, so sessions remain valid
-  indefinitely regardless of inactivity.
-
-![Missing session timeout](evidence/exploits/a2-missing-session-timeout.png)
-
-*Figure 22 — Session cookie inspected via DevTools, no expiry/Max-Age set*
+![Plaintext Password Comparison Code](Plaintext_password_comparison_code.png)  
+*Figure 16 — `validateLogin` comparing passwords with `===` instead of a hash check*[cite: 2]
 
 ---
 
-## 5. Handoff checklist
+### A2.2 — Username Enumeration — T1[cite: 2]
 
-- [x] Apply source code fixes for A1, A3, A4, A7 and re-verify (Section 2)
-- [x] Exploit T2, T3, T4 and capture evidence (Section 3)
-- [ ] Apply source code fixes for T2, T3, T4
-- [ ] Re-run the SAST scan (using the same config as the baseline, or the
-      pipeline's config — see the reconciliation note above) and record the
-      before/after count or diff
-- [ ] Optionally address the five audit-based findings in Section 4
-- [x] Threat model (`docs/threat-model.md`) already covers T1–T12
+* **Location:** `/login`[cite: 2]
+* **Finding:** Distinct error messages for an invalid username versus an invalid password allow account discovery[cite: 2].
+
+![Invalid Username Response](Invalid_username_response.png)  
+*Figure 17 — “Invalid username” response*[cite: 2]
+
+![Invalid Password Response](Invalid_password_response.png)  
+*Figure 18 — “Invalid password” response for a known username*[cite: 2]
+
+---
+
+### A2.3 — Insecure Cookie Attributes — T7[cite: 2]
+
+* **Location:** `server.js` session configuration[cite: 2]
+* **Finding:** The session cookie is missing the `Secure` attribute, confirmed via browser developer tools[cite: 2].
+
+![Insecure Cookie Flags](Insecure_cookie_flags.png)  
+*Figure 19 — Session cookie inspected via DevTools, Secure not set*[cite: 2]
+
+---
+
+### A2.4 — Weak Password Policy — T8[cite: 2]
+
+* **Location:** `app/routes/session.js` (`PASS_RE = /^.{1,20}$/`)[cite: 2]
+* **Finding:** A one-character password was successfully registered and used to log in[cite: 2].
+
+![Weak Password Accepted at Signup](Weak_password_accepted_at_signup.png)  
+*Figure 20 — Registering an account with a single-character password*[cite: 2]
+
+![Weak Password Accepted at Login](Weak_password_accepted_at_login.png)  
+*Figure 21 — Successfully logging in with the same weak password*[cite: 2]
+
+---
+
+### A2.5 — Missing Session Idle Timeout — T9[cite: 2]
+
+* **Location:** `server.js` session configuration[cite: 2]
+* **Finding:** No `maxAge` is configured, so sessions remain valid indefinitely regardless of inactivity[cite: 2].
+
+![Missing Session Timeout](Missing_session_timeout.png)  
+*Figure 22 — Session cookie inspected via DevTools, no expiry/Max-Age set*[cite: 2]
+
+---
+
+## 5. T13 — AppRole Credential Flow Compromise (not exploited)[cite: 2]
+
+T13, documented in `docs/threat-model.md`, concerns compromise of the Vault AppRole credential flow used for secrets provisioning[cite: 2]. It is intentionally excluded from the exploit-and-fix set: no working exploit is demonstrated here, since doing so safely would require simulating a compromise of a running container to steal live credentials, rather than an external application-layer attack[cite: 2]. Its recommended controls are infrastructure hardening measures (Vault policy scope, credential volume access, credential lifetime) rather than an application code fix[cite: 2]. One of its recommended controls — preventing secrets from reaching source control — is already implemented and enforced via the Gitleaks secrets-scanning CI gate[cite: 2].
+
+---
+
+## 6. Handoff Checklist[cite: 2]
+
+- [x] Exploit T1–T12 and capture evidence[cite: 2]
+- [ ] Apply source code fixes for T1–T12 and re-verify[cite: 2]
+- [ ] Re-run the CI pipeline’s SAST scan after all fixes are pushed and record the new finding count against the CI #20 baseline of 15 (3 ERROR, 12 WARNING); cite the new run number and commit[cite: 2]
+- [ ] Optionally address the five audit-based findings in Section 4[cite: 2]
+- [x] Threat model (`docs/threat-model.md`) covers T1–T13[cite: 2]
+- [x] T13 documented as identified-but-not-exploited (infrastructure-level, out of scope for this workstream)[cite: 2]
