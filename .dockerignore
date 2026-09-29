@@ -60,3 +60,4 @@ prompt*.txt
 
 # CI helper scripts - not needed inside the runtime image
 scripts/
+evidence/a2-before-db/
