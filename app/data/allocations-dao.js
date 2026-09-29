@@ -62,9 +62,7 @@ const AllocationsDAO = function(db){
 };
 
 if (threshold !== undefined && threshold !== "") {
-    const text = typeof threshold === "string"
-        ? threshold.trim()
-        : "";
+        const text = typeof threshold === "string" ? threshold.trim() : "";
 
     const parsedThreshold = Number(text);
 

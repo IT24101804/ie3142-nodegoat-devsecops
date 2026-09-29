@@ -65,9 +65,8 @@ const index = (app, db) => {
 
         // Only redirect to the approved learning resource.
     app.get("/learn", isLoggedIn, (req, res) => {
-        const learningUrl =
-            "https://www.khanacademy.org/economics-finance-domain/core-finance/investment-vehicles-tutorial/ira-401ks/v/traditional-iras";
-
+        const learningUrl = "https://www.khanacademy.org/economics-finance-domain/" +
+            "core-finance/investment-vehicles-tutorial/ira-401ks/v/traditional-iras";
         if (req.query.url !== undefined && req.query.url !== learningUrl) {
             return res.status(400).send("Invalid learning resource URL");
         }
