@@ -397,11 +397,11 @@ listed explicitly so the diagram can be reproduced without reading the prose.
 | `N3` | **nodegoat-web**<br/>Node.js 20 / Express<br/>172.19.0.3:4000 | Rectangle | Zone 2 — semi-trusted | `#fcf8e3` | `#8a6d3b` |
 | `N4` | **nodegoat-mongo**<br/>MongoDB 4.4<br/>172.19.0.2:27017 | Rectangle | Zone 3 — trusted | `#dff0d8` | `#3c763d` |
 | `N5` | nodegoat-mongo-data | Cylinder (database) | Zone 3 — trusted | `#d9edf7` | `#31708f` |
-
 | `N7` | **nodegoat-vault**<br/>HashiCorp Vault 2.1.0 / :8200 | Rectangle | Zone 3 – trusted | `#dff0d8` | `#3c763d` |
 | `N8` | **nodegoat-vault-init**<br/>One-shot Vault provisioning service | Rectangle | Zone 3 – trusted | `#dff0d8` | `#3c763d` |
 | `N9` | vault-approle | Cylinder (storage) | Zone 3 – trusted | `#d9edf7` | `#31708f` |
 | `N10` | vault-audit | Cylinder (storage) | Zone 3 – trusted | `#d9edf7` | `#31708f` |
+
 ### Containers / groupings (draw as nested boxes)
 
 | ID | Label | Contains |
@@ -418,7 +418,6 @@ listed explicitly so the diagram can be reproduced without reading the prose.
 | `F2` | `N3` → `N4` | `MongoDB wire protocol`<br/>`TCP :27017, no auth` | Solid arrow, **thick** |
 | `F3` | `N4` → `N5` | `filesystem writes` | Solid arrow, thin |
 | `F7` | `N6` → `N3` | `HTTPS :443 (build time only)` | **Dashed** arrow, thin |
-
 | `F8` | `N8` → `N7` | `Vault provisioning / HTTP :8200` | Solid arrow, **thick** |
 | `F9` | `N7` → `N8` | `AppRole credentials provisioning` | Solid arrow, thin |
 | `F10` | `N3` → `N7` | `Fetch application secrets / HTTP :8200 (private Docker network)` | Solid arrow, **thick** |
@@ -508,3 +507,6 @@ Every factual claim in this document was checked against the running stack.
 
 ---
 
+*Phase 1 of the IE3142 DevOps Security group assignment. Application based on
+[OWASP NodeGoat](https://github.com/OWASP/NodeGoat) at commit `c5cb68a`,
+Apache License 2.0. See the [README](../README.md) for full attribution.*
