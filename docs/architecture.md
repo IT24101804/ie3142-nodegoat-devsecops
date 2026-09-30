@@ -35,8 +35,11 @@ requests. Nothing here is assumed. Verification commands are in
 
 ## 1. System overview
 
-Two containers on one private bridge network. Only the web application is
-reachable from the host; the database is not published at all.
+Two application containers on one private bridge network. Only the web application is
+reachable from the host; the database is not published at all. The optional Vault
+secrets-management services (`nodegoat-vault`, `nodegoat-vault-init`) join the same
+network; they are covered in §4 (TB-4) and in `docs/secrets.md`. The diagram below
+shows the application tier only.
 
 ```mermaid
 flowchart TB
@@ -146,7 +149,7 @@ opens the connection.
 | # | From | To | Protocol | Port | Auth | Data carried | Crosses |
 |---|---|---|---|---|---|---|---|
 | **F1** | Browser | `nodegoat-web` | HTTP/1.1 (**cleartext**) | `127.0.0.1:4000` → `4000/tcp` | Session cookie `connect.sid` | Credentials at login, form submissions, HTML/CSS/JS responses | **TB-1** |
-| **F2** | `nodegoat-web` | `nodegoat-mongo` | MongoDB wire protocol (TCP, **cleartext**) | `172.19.0.2:27017` | **None** | Queries and results: user records, plaintext passwords, allocations, memos | **TB-2** |
+| **F2** | `nodegoat-web` | `nodegoat-mongo` | MongoDB wire protocol (TCP, **cleartext**) | `172.19.0.2:27017` | **None** | Queries and results: user records (bcrypt password hashes), allocations, memos | **TB-2** |
 | **F3** | `nodegoat-mongo` | `nodegoat-mongo-data` | Filesystem (volume mount) | n/a | Docker-enforced | WiredTiger data files at `/data/db` | **TB-3** |
 | **F4** | Docker Engine | `nodegoat-web` | `wget` inside container | `127.0.0.1:4000` | None | Healthcheck probe (`/login`) | internal |
 | **F5** | Docker Engine | `nodegoat-mongo` | `mongo --eval` inside container | local socket | None | Healthcheck probe (`adminCommand('ping')`) | internal |
@@ -163,9 +166,11 @@ bundled certificate (`artifacts/cert/server.crt`) expired 2016-04-24. This is
 one of NodeGoat's intentional vulnerabilities (A6 — Sensitive Data Exposure),
 not an oversight in our deployment.
 
-**F2 carries plaintext passwords.** `artifacts/db-reset.js:18,27,35` seeds
-passwords unhashed (the bcrypt hashes are present but commented out). Intentional
-upstream behaviour, demonstrating A2 — Broken Authentication.
+**F2 no longer carries plaintext passwords.** As shipped by OWASP,
+`artifacts/db-reset.js` seeded passwords unhashed. After fix T6, the seed script
+inserts bcrypt hashes and `app/data/user-dao.js` hashes on signup and verifies with
+`bcrypt.compareSync`, so stored credentials are salted hashes. The traffic itself is
+still cleartext: there is no TLS on the Docker bridge.
 
 **F7 is build-time only.** Once images are built, the running application makes
 **no outbound connections whatsoever**. All front-end assets (Bootstrap, jQuery,
@@ -294,6 +299,31 @@ The container cannot reach arbitrary host paths — only the volume Docker mount
 for it. Volume contents persist across `docker compose down` and are destroyed
 only by `docker compose down -v`.
 
+### TB-4 — Application ⟷ Secrets management
+
+| | |
+|---|---|
+| **Separates** | Application container (semi-trusted) from the Vault services (trusted) |
+| **Crossed by** | F10, F11, F12 (see §7) |
+| **Enforced by** | Private Docker network (Vault is not published to the host); read-only mount of the AppRole volume in the web container; least-privilege Vault policy |
+
+Present only when Vault is enabled. `nodegoat-vault-init` provisions an AppRole and
+writes its credentials to the `vault-approle` volume; the web container reads them
+read-only at startup and fetches the application secrets over the private network.
+
+**Controls present**
+- Vault is not published to the host, LAN or internet.
+- AppRole credentials are short-lived (token TTL 20 minutes) and the policy grants
+  read access to one path only.
+- Every access is written to an audit log (`vault-audit` volume).
+
+**Controls absent or limited** (accepted for the offline lab; see `docs/secrets.md`, §8)
+- Vault runs in development mode (in-memory, auto-unsealed).
+- No TLS between the application and Vault.
+- `secret_id` is delivered through a shared Docker volume.
+
+Threat T13 in `docs/threat-model.md` analyses this boundary.
+
 ### TB-0 — Build-time supply chain
 
 | | |
@@ -378,8 +408,9 @@ Seeding is **conditional**: `docker/seed-if-empty.js` counts the `users`
 collection and seeds only when it is empty. Resetting is therefore an explicit
 operator action, never a side effect of starting the stack.
 
-`artifacts/db-reset.js` is left exactly as OWASP ships it, so it remains usable
-as the documented reset command.
+`artifacts/db-reset.js` remains the documented reset command. It differs from the
+OWASP original only in that the three seed users are stored as bcrypt hashes
+(fix T6); the demo credentials are unchanged and documented in the README.
 
 ---
 
@@ -397,6 +428,7 @@ listed explicitly so the diagram can be reproduced without reading the prose.
 | `N3` | **nodegoat-web**<br/>Node.js 20 / Express<br/>172.19.0.3:4000 | Rectangle | Zone 2 — semi-trusted | `#fcf8e3` | `#8a6d3b` |
 | `N4` | **nodegoat-mongo**<br/>MongoDB 4.4<br/>172.19.0.2:27017 | Rectangle | Zone 3 — trusted | `#dff0d8` | `#3c763d` |
 | `N5` | nodegoat-mongo-data | Cylinder (database) | Zone 3 — trusted | `#d9edf7` | `#31708f` |
+| `N6` | Docker Hub / npm registry | Cloud | Zone 0 — untrusted | `#f2dede` | `#a94442` |
 | `N7` | **nodegoat-vault**<br/>HashiCorp Vault 2.1.0 / :8200 | Rectangle | Zone 3 – trusted | `#dff0d8` | `#3c763d` |
 | `N8` | **nodegoat-vault-init**<br/>One-shot Vault provisioning service | Rectangle | Zone 3 – trusted | `#dff0d8` | `#3c763d` |
 | `N9` | vault-approle | Cylinder (storage) | Zone 3 – trusted | `#d9edf7` | `#31708f` |
@@ -462,18 +494,23 @@ Accepted, documented trade-offs in the architecture as built:
 | In-memory session store | Sessions lost on restart; will not scale | Single instance; upstream default | Out of scope for this module |
 | Vault runs in development mode | Vault dev mode stores data in memory, auto-unseals, and is not suitable for production deployment | The project is an offline local teaching environment; Vault is used to demonstrate secrets management without requiring external infrastructure | For production, deploy Vault with persistent encrypted storage, proper initialization and unsealing, TLS, restricted administrative access, and appropriate high-availability configuration |
 
-### 8.2 Application vulnerabilities (owned by other team members)
+### 8.2 Application vulnerabilities
 
-NodeGoat is **deliberately vulnerable** and its application code is unmodified.
-Injection, XSS, broken access control, SSRF, insecure deserialisation and
-vulnerable dependencies are all present **by design**. They are listed here only
-so that this document's boundary analysis is not mistaken for a claim that the
-application is secure. Identifying, rating and remediating them is owned
-separately.
+NodeGoat is **deliberately vulnerable**. The Phase 1 deployment documented above was
+built and verified with the application code unmodified. Since then the secure-coding
+phase has fixed six weaknesses (T5 NoSQL injection, T6 plaintext passwords, T11 IDOR,
+T12 missing function-level access control, T14 `eval()` injection, T15 open redirect);
+T1–T4 and T7–T10 remain open by choice and are documented, with their status, in
+`docs/threat-model.md` and `docs/vulnerabilities.md`. Injection, XSS, SSRF, insecure
+deserialisation and vulnerable dependencies that are not listed there are present by
+design. They are listed here only so that this document's boundary analysis is not
+mistaken for a claim that the application is secure.
 
 ### 8.3 Secrets management options under consideration
 
-Recorded here so the later-phase decision has a written starting point.
+Recorded here as the options that were considered. Outcome: `.env` plus a self-hosted,
+in-compose HashiCorp Vault (AppRole) was implemented, which satisfies the offline
+requirement; see `docs/secrets.md`.
 
 | Option | Strengths | Weaknesses |
 |---|---|---|

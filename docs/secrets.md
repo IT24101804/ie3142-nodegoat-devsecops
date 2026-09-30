@@ -4,8 +4,8 @@ How secrets are provisioned to the running application and to the CI pipeline,
 what remains hardcoded and why, and the limitations we could not remove.
 
 **Scope.** This documents secrets *provisioning*. It is not a threat model, and
-it does not remediate NodeGoat's application vulnerabilities — those are owned
-separately and are deliberately left intact.
+it does not remediate NodeGoat's application vulnerabilities; those, and their
+fix status, are tracked in `docs/threat-model.md` and `docs/vulnerabilities.md`.
 
 ---
 
@@ -90,7 +90,7 @@ The ZAP suite requires a proxy at a hardcoded VirtualBox address
 
 | Item | Location |
 |---|---|
-| `Admin_123`, `User1_123`, `User2_123` | `artifacts/db-reset.js:18,27,35` (seeded **plaintext**; bcrypt hashes commented out at `:19,28,36`) |
+| `Admin_123`, `User1_123`, `User2_123` | Demo login passwords, published in the README. Since fix T6, `artifacts/db-reset.js` seeds only their **bcrypt hashes**, so the plaintext values are no longer stored in the seed script or the database |
 | Fixture passwords | `test/e2e/fixtures/users/*.json` |
 
 ### Documentation samples — not config
@@ -320,7 +320,7 @@ Removing these would be worse than leaving them.
 | Item | Location | Why retained |
 |---|---|---|
 | `zapApiKey` | `config/env/development.js:6`, `test.js:6` | **The demonstration finding for the Gitleaks gate.** Tooling-only for an unrunnable suite. Removing it destroys the demo and reduces no real risk. Baselined by exact fingerprint. |
-| Seeded passwords | `artifacts/db-reset.js:18,27,35` | Published upstream, documented in README, and relied on by `scripts/smoke-test.sh`. Moving them would break a working test for no security gain. |
+| Demo passwords | README; `scripts/smoke-test.sh` | Published upstream, documented in README, and used by the smoke test to log in. Only their bcrypt hashes are seeded (`artifacts/db-reset.js`), so the database never holds them in plaintext. |
 | Fixture passwords | `test/e2e/fixtures/users/*.json` | Cypress fixtures for a suite that cannot run. |
 | Tutorial samples | `app/views/tutorial/a2.html:153`, `a3.html:176` | Documentation. Changing them damages the teaching material. |
 | `cryptoAlgo` | `config/env/all.js` | An algorithm name, not a secret. |
@@ -410,6 +410,8 @@ Every claim checked against the running stack.
 | `.env` never tracked | `git check-ignore -v .env` | `.gitignore:28` |
 | Baseline accurate | compare fingerprints to raw scan | **0 stale, 0 unbaselined** |
 | Pipeline still green | GitHub Actions | CI #13, all 7 jobs pass |
+| Seeded users stored as hashes | inspect the `users` collection on a fresh volume | `$2a$` bcrypt hashes; login as `admin` still works |
+| Pipeline green after the secure-coding fixes | GitHub Actions | CI #40 (PR #3 merge), all jobs pass, Gitleaks gate enforcing |
 
 ---
 
