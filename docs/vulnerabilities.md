@@ -1,4 +1,3 @@
-
 # Vulnerability Assessment & Secure Coding Evidence — IE3142 NodeGoat DevSecOps
 
 **Target application:** OWASP NodeGoat (`http://localhost:4000`)  
